@@ -136,16 +136,19 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
     if not user.is_verified:
         raise HTTPException(status_code=400, detail="Please verify your email first")
 
+    # Token එක හදන්නේ user.id එක යොදාගෙනයි
     token = create_access_token({"user_id": user.id})
 
+    # මෙතන තමයි වැදගත්ම වෙනස: "id": user.id එකතු කරා
     return {
         "access_token": token,
+        "token_type": "bearer",
         "user": {
+            "id": user.id,  # <--- මේ පේළිය අනිවාර්යයෙන්ම අවශ්‍යයි
             "name": user.name,
             "email": user.email
         }
     }
-
 
 # ---------------------------
 # RESEND OTP

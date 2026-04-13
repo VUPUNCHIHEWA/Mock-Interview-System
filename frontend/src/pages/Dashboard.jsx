@@ -1,280 +1,58 @@
-import React from "react";
-import { useNavigate } from "react-router-dom";
-import Navbar from "../components/Navbar";
+import React from 'react';
+import { useNavigate } from 'react-router-dom';
 
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  CartesianGrid
-} from "recharts";
+const Dashboard = () => {
+    const navigate = useNavigate();
 
-import { CircularProgressbar } from "react-circular-progressbar";
-import "react-circular-progressbar/dist/styles.css";
-
-import {
-  FaPlay,
-  FaChartLine,
-  FaFileAlt,
-  FaBriefcase
-} from "react-icons/fa";
-
-const chartData = [
-  { date: "Jan 15", score: 65 },
-  { date: "Jan 22", score: 72 },
-  { date: "Feb 5", score: 68 },
-  { date: "Feb 18", score: 78 },
-  { date: "Mar 3", score: 82 },
-  { date: "Mar 17", score: 87 }
-];
-
-function Dashboard() {
-
-  const navigate = useNavigate();
-  const user = JSON.parse(localStorage.getItem("user"));
-
-  return (
-    <div className="min-h-screen bg-gray-100">
-
-      {/* NAVBAR */}
-      <Navbar />
-
-      {/* MAIN CONTENT */}
-      <div className="max-w-7xl mx-auto px-4 md:px-8 py-10 space-y-10">
-
-        {/* WELCOME */}
-        <div>
-
-          <h1 className="text-2xl md:text-3xl font-bold">
-            Welcome back, {user?.name}!
-          </h1>
-
-          <p className="text-gray-500 mt-1">
-            Track your progress and improve your interview confidence
-          </p>
-
-        </div>
-
-        {/* SCORE SECTION */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-
-          {/* CONFIDENCE CIRCLE */}
-          <div className="bg-white p-6 rounded-xl shadow flex flex-col items-center justify-center">
-
-            <div className="w-28 h-28 md:w-32 md:h-32">
-              <CircularProgressbar value={87} text={`87%`} />
-            </div>
-
-            <p className="mt-4 font-semibold text-gray-700">
-              Overall Confidence
-            </p>
-
-          </div>
-
-          {/* VISUAL SCORE */}
-          <div className="bg-white p-6 rounded-xl shadow">
-
-            <p className="text-gray-500 text-sm">
-              Visual Confidence
-            </p>
-
-            <h2 className="text-3xl font-bold mt-2">
-              82%
-            </h2>
-
-            <p className="text-sm text-gray-400">
-              Eye contact & posture
-            </p>
-
-          </div>
-
-          {/* VOCAL SCORE */}
-          <div className="bg-white p-6 rounded-xl shadow">
-
-            <p className="text-gray-500 text-sm">
-              Vocal Confidence
-            </p>
-
-            <h2 className="text-3xl font-bold mt-2">
-              76%
-            </h2>
-
-            <p className="text-sm text-gray-400">
-              Speech clarity
-            </p>
-
-          </div>
-
-          {/* CONTENT SCORE */}
-          <div className="bg-white p-6 rounded-xl shadow">
-
-            <p className="text-gray-500 text-sm">
-              Content Quality
-            </p>
-
-            <h2 className="text-3xl font-bold mt-2">
-              89%
-            </h2>
-
-            <p className="text-sm text-gray-400">
-              Answer relevance
-            </p>
-
-          </div>
-
-        </div>
-
-        {/* ACTION BUTTONS */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-
-          <button
-            onClick={()=>navigate("/interview")}
-            className="bg-blue-600 text-white p-5 rounded-xl flex items-center justify-center gap-3 shadow hover:bg-blue-700 transition"
-          >
-            <FaPlay />
-            Start Interview
-          </button>
-
-          <button
-            onClick={()=>navigate("/history")}
-            className="bg-white p-5 rounded-xl shadow flex items-center justify-center gap-3 hover:bg-gray-50"
-          >
-            <FaChartLine />
-            Performance History
-          </button>
-
-          <button
-            onClick={()=>navigate("/cv")}
-            className="bg-white p-5 rounded-xl shadow flex items-center justify-center gap-3 hover:bg-gray-50"
-          >
-            <FaFileAlt />
-            Manage CV
-          </button>
-
-          <button
-            onClick={()=>navigate("/jobs")}
-            className="bg-white p-5 rounded-xl shadow flex items-center justify-center gap-3 hover:bg-gray-50"
-          >
-            <FaBriefcase />
-            Job Suggestions
-          </button>
-
-        </div>
-
-        {/* PERFORMANCE CHART */}
-        <div className="bg-white p-6 rounded-xl shadow">
-
-          <h2 className="text-xl font-semibold mb-6">
-            Performance Trend
-          </h2>
-
-          <ResponsiveContainer width="100%" height={300}>
-
-            <LineChart data={chartData}>
-
-              <CartesianGrid strokeDasharray="3 3" />
-
-              <XAxis dataKey="date" />
-
-              <YAxis />
-
-              <Tooltip />
-
-              <Line
-                type="monotone"
-                dataKey="score"
-                stroke="#2563eb"
-                strokeWidth={3}
-              />
-
-            </LineChart>
-
-          </ResponsiveContainer>
-
-        </div>
-
-        {/* BOTTOM SECTION */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-
-          {/* RECENT INTERVIEWS */}
-          <div className="bg-white p-6 rounded-xl shadow">
-
-            <h2 className="text-xl font-semibold mb-6">
-              Recent Interviews
-            </h2>
-
-            <div className="space-y-4">
-
-              <div className="flex justify-between bg-gray-50 p-4 rounded-lg">
+    return (
+        <div className="animate-in fade-in duration-500">
+            {/* Header */}
+            <header className="flex justify-between items-center mb-8 bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
                 <div>
-                  <p className="font-semibold">
-                    Software Engineer
-                  </p>
-                  <p className="text-sm text-gray-500">
-                    Mar 17, 2026
-                  </p>
+                    <h1 className="text-2xl font-black text-slate-800">Candidate Dashboard</h1>
+                    <p className="text-slate-400 text-sm font-medium">Final Year Project - AI Mock Interview System</p>
                 </div>
-                <p className="text-xl font-bold">
-                  89%
-                </p>
-              </div>
-
-              <div className="flex justify-between bg-gray-50 p-4 rounded-lg">
-                <div>
-                  <p className="font-semibold">
-                    Backend Developer
-                  </p>
-                  <p className="text-sm text-gray-500">
-                    Mar 3, 2026
-                  </p>
+                <div className="flex items-center space-x-4">
+                    <div className="text-right">
+                        <p className="font-bold text-slate-800 leading-none">Vishwani Umesha</p>
+                        <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-bold mt-1 inline-block uppercase">IT Undergraduate</span>
+                    </div>
+                    <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center text-white font-bold">VU</div>
                 </div>
-                <p className="text-xl font-bold">
-                  82%
-                </p>
-              </div>
+            </header>
 
+            {/* Quick Stats Grid - මේ ටික තමයි ඔයාගේ image එකේ තියෙන්නේ */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+                <div className="bg-white p-8 rounded-3xl border border-slate-100 shadow-sm">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Interviews</p>
+                    <h3 className="text-4xl font-black text-slate-800">04</h3>
+                </div>
+                <div className="bg-white p-8 rounded-3xl border border-slate-100 shadow-sm">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Avg. Confidence</p>
+                    <h3 className="text-4xl font-black text-emerald-500">78%</h3>
+                </div>
+                <div className="bg-white p-8 rounded-3xl border border-slate-100 shadow-sm">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Target Role</p>
+                    <h3 className="text-2xl font-bold text-blue-600 italic">QA Engineer</h3>
+                </div>
             </div>
 
-          </div>
-
-          {/* AI FEEDBACK */}
-          <div className="bg-white p-6 rounded-xl shadow">
-
-            <h2 className="text-xl font-semibold mb-6">
-              AI Feedback Summary
-            </h2>
-
-            <div className="space-y-3">
-
-              <div className="bg-green-100 p-4 rounded-lg">
-                ✔ Strong technical explanation
-              </div>
-
-              <div className="bg-green-100 p-4 rounded-lg">
-                ✔ Good posture and confidence
-              </div>
-
-              <div className="bg-yellow-100 p-4 rounded-lg">
-                ⚠ Reduce filler words
-              </div>
-
-              <div className="bg-yellow-100 p-4 rounded-lg">
-                ⚠ Improve eye contact
-              </div>
-
+            {/* Start Button Area */}
+            <div className="bg-white p-20 rounded-[3.5rem] text-center border-2 border-dashed border-slate-200">
+                <div className="w-20 h-20 bg-blue-50 rounded-full flex items-center justify-center text-4xl mx-auto mb-6">🚀</div>
+                <h2 className="text-3xl font-black text-slate-800 mb-4">Ready to Start?</h2>
+                <p className="text-slate-500 mb-10 max-w-md mx-auto font-medium leading-relaxed">
+                    Set up your interview by syncing your GitHub and CV for a personalized experience.
+                </p>
+                <button 
+                    onClick={() => navigate('/InterviewSetup')}
+                    className="bg-blue-600 text-white px-16 py-5 rounded-[2rem] font-black text-xl hover:bg-blue-700 transition-all shadow-2xl shadow-blue-100 active:scale-95"
+                >
+                    Launch Interview Setup
+                </button>
             </div>
-
-          </div>
-
         </div>
-
-      </div>
-
-    </div>
-  );
-}
+    );
+};
 
 export default Dashboard;
