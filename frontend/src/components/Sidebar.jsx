@@ -5,7 +5,7 @@ const Sidebar = () => {
     const navigate = useNavigate();
     const location = useLocation();
 
-    // දැනට ඉන්න page එක අනුව sidebar item එක highlight කරන්න
+   
     const isActive = (path) => location.pathname === path;
 
     return (

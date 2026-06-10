@@ -7,12 +7,12 @@ from database import engine, SessionLocal
 from models import Base
 import users
 
-# Database tables create කිරීම
+
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
-# DB Session එක ලබා ගැනීමට Dependency එකක්
+
 def get_db():
     db = SessionLocal()
     try:
@@ -20,7 +20,7 @@ def get_db():
     finally:
         db.close()
 
-# Enable CORS (Frontend එකට සම්බන්ධ වීමට)
+
 origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173"
@@ -34,8 +34,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# User Router එක සම්බන්ධ කිරීම (Signup/Login සඳහා)
-# සටහන: Frontend එකේ URL එක http://localhost:8000/login නම් prefix එක අයින් කරන්න.
+
 app.include_router(users.router)
 
 @app.get("/")
@@ -53,7 +52,7 @@ async def save_cv(data: dict, db: Session = Depends(get_db)):
     db_cv = db.query(models.CVData).filter(models.CVData.user_id == user_id).first()
 
     if db_cv:
-        # තිබේ නම් පවතින record එක Update කිරීම
+        
         db_cv.full_name = data.get("full_name")
         db_cv.role = data.get("role")
         db_cv.email = data.get("email")
@@ -65,7 +64,7 @@ async def save_cv(data: dict, db: Session = Depends(get_db)):
         db_cv.publications = data.get("publications")
         db_cv.github_username = data.get("github_username")
     else:
-        # නැත්නම් අලුත් Record එකක් Create කිරීම
+        
         new_cv = models.CVData(
             user_id=user_id,
             full_name=data.get("full_name"),

@@ -10,10 +10,14 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@dotlottie/react-player": "^1.6.19",
     "axios": "^1.14.0",
+    "dotlottie-player": "^2.5.6",
+    "framer-motion": "^12.38.0",
     "html2canvas": "^1.4.1",
     "jspdf": "^4.2.1",
-    "lucide-react": "^1.7.0",
+    "lottie-react": "^2.4.1",
+    "lucide-react": "^1.8.0",
     "react": "^19.2.0",
     "react-circular-progressbar": "^2.2.0",
     "react-dom": "^19.2.0",

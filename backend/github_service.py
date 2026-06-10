@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 app = FastAPI()
 
-# GitHub Personal Access Token එක මෙතනට දාන්න (Rate limiting මඟහරවා ගැනීමට)
+
 GITHUB_TOKEN = "YOUR_GITHUB_PERSONAL_ACCESS_TOKEN"
 HEADERS = {"Authorization": f"token {GITHUB_TOKEN}"} if GITHUB_TOKEN else {}
 
@@ -22,7 +22,7 @@ class GitHubStats(BaseModel):
 
 @app.get("/api/github/{username}", response_model=GitHubStats)
 async def get_github_stats(username: str):
-    # GitHub API URL එක - repos සහ profile විස්තර ලබා ගැනීමට
+    
     url = f"https://api.github.com/users/{username}/repos?per_page=100"
     
     try:
@@ -38,7 +38,7 @@ async def get_github_stats(username: str):
         languages = set()
 
         for repo in repos:
-            # Fork කරපු ඒවා නැතුව තමන්ගේම ඒව විතරක් ගමු
+            
             if not repo["fork"]:
                 repo_list.append({
                     "name": repo["name"],
@@ -48,14 +48,14 @@ async def get_github_stats(username: str):
                 if repo["language"]:
                     languages.add(repo["language"])
 
-        # Stars වැඩිම තියෙන projects මුලට එන විදිහට sort කරමු
+        
         sorted_repos = sorted(repo_list, key=lambda x: x["stars"], reverse=True)
 
         return {
             "username": username,
             "total_repos": len(repo_list),
             "languages": list(languages),
-            "top_projects": sorted_repos[:5] # හොඳම projects 5 පමණක් ලබා දීම
+            "top_projects": sorted_repos[:5] 
         }
     
     except requests.exceptions.RequestException as e:

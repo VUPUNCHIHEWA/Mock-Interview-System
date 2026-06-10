@@ -13,6 +13,8 @@ import CV from "./pages/CV";
 import Jobs from "./pages/Jobs";
 import VerifyOTP from "./pages/VerifyOTP";
 import InterviewSetup from './pages/InterviewSetup';
+import InterviewSession from './pages/InterviewSession';
+
 
 
 const MainLayout = ({ children }) => (
@@ -42,6 +44,9 @@ function App() {
         <Route path="/history" element={<MainLayout><History /></MainLayout>} />
         <Route path="/cv" element={<MainLayout><CV /></MainLayout>} />
         <Route path="/jobs" element={<MainLayout><Jobs /></MainLayout>} />
+
+        <Route path="/interview-session" element={<InterviewSession />} />
+        
       </Routes>
     </BrowserRouter>
   );
