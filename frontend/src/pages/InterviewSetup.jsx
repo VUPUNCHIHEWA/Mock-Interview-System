@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import axios from 'axios'; // Axios import කරගන්න
 import { 
     LayoutDashboard, CheckCircle, Target, Loader2, 
     Search, Code, FilePlus, AlertCircle, ChevronRight
@@ -14,28 +15,73 @@ const InterviewSetup = () => {
     const [difficulty, setDifficulty] = useState('Medium');
     const [githubUser, setGithubUser] = useState("");
     const [isSyncing, setIsSyncing] = useState(false);
+    const [isLaunching, setIsLaunching] = useState(false); // Launch වෙද්දී ලෝඩර් එකක් පෙන්වීමට
     const [hasCV, setHasCV] = useState(false); 
+    
+    // CV එකෙන් Extract කරපු Text එක තියාගන්න State එක
+    const [cvText, setCvText] = useState(""); 
+    const [syncedRepos, setSyncedRepos] = useState([]); // GitHub repos store කරගන්න
 
-    // GitHub Sync Logic
-    const handleGithubSync = () => {
+    // GitHub Sync Logic (Connected to Backend)
+    const handleGithubSync = async () => {
         if (!githubUser) return alert("Please enter your GitHub username!");
+        
         setIsSyncing(true);
-        setTimeout(() => {
+        try {
+            const response = await axios.get(`http://localhost:8000/api/github-sync/${githubUser}`);
+            if (response.data.success) {
+                setSyncedRepos(response.data.repositories); // Repositories ටික state එකට දානවා
+                alert(response.data.message);
+            }
+        } catch (error) {
+            console.error("Sync failed:", error);
+            alert(error.response?.data?.message || "GitHub Sync Failed!");
+        } finally {
             setIsSyncing(false);
-            alert(`GitHub profile for ${githubUser} synced successfully!`);
-        }, 2000);
+        }
     };
 
-    // Final Action: Pass all data to the Interview Session
-    const handleStartInterview = () => {
-        navigate('/interview-session', { 
-            state: { 
-                role: selectedRole,
-                difficulty: difficulty,
-                github: githubUser,
-                cvStatus: hasCV
-            } 
-        });
+    // CV Upload එක සාර්ථක වුණාම Backend එකෙන් එන extracted_text එක බාරගන්නවා
+    const handleCVUploadSuccess = (extractedText) => {
+        setHasCV(true);
+        setCvText(extractedText); // PDF එකෙන් ගත්ත අකුරු ටික මෙතන save වෙනවා
+    };
+
+    // Final Action: Data ටික Backend එකට යවලා Save කරලා ඊළඟ පිටුවට යාම
+    const handleStartInterview = async () => {
+        setIsLaunching(true);
+
+        // Backend එකට ගැලපෙන්න Role එක full name එකක් විදිහට සකස් කිරීම
+        const fullRoleName = selectedRole === 'QA' ? 'Software QA Engineer' : 'Full-Stack Software Engineer';
+
+        const payload = {
+            role: fullRoleName,
+            difficulty: difficulty,
+            githubUsername: githubUser || "N/A",
+            cvPath: cvText // මුළු PDF එකේම Text එක මෙතනින් යනවා
+        };
+
+        try {
+            const response = await axios.post("http://localhost:8000/api/start-interview", payload);
+            if (response.data.success) {
+                // 🔥 වැදගත්: Backend එකෙන් ලැබුණු 'firstQuestion' එකත් අපි Session එකට පාස් කරනවා
+                navigate('/interview-session', { 
+                    state: { 
+                        sessionId: response.data.sessionId, 
+                        firstQuestion: response.data.firstQuestion, // Gemini ගේ පළමු ප්‍රශ්නය
+                        role: fullRoleName,
+                        difficulty: difficulty,
+                        github: githubUser,
+                        cvStatus: hasCV
+                    } 
+                });
+            }
+        } catch (error) {
+            console.error("Failed to start interview:", error);
+            alert("Failed to initialize the interview session with Gemini. Please try again.");
+        } finally {
+            setIsLaunching(false);
+        }
     };
 
     return (
@@ -53,7 +99,9 @@ const InterviewSetup = () => {
                     <div className="hidden md:flex gap-4">
                         <div className="bg-white px-4 py-2 rounded-xl border border-slate-100 shadow-sm flex items-center gap-2">
                             <Target size={14} className="text-blue-500" />
-                            <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Target: {selectedRole}</span>
+                            <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                                Target: {selectedRole === 'QA' ? 'QA Engineer' : 'Full-Stack'}
+                            </span>
                         </div>
                     </div>
                 </div>
@@ -67,33 +115,30 @@ const InterviewSetup = () => {
                             <p className="text-slate-400 mt-3 font-medium text-sm">Configure your AI interviewer based on your profile and target role.</p>
                         </div>
 
-                        {/* STEP 1: DATA SOURCES (CV FIRST) */}
+                        {/* STEP 1: DATA SOURCES */}
                         <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm space-y-8">
                             <div className="flex items-center gap-4 border-b border-slate-50 pb-6">
                                 <span className="bg-slate-900 text-white w-8 h-8 rounded-full flex items-center justify-center text-xs font-black">01</span>
                                 <h3 className="font-black text-slate-800 uppercase text-xs tracking-[0.2em]">Knowledge Sources</h3>
                             </div>
 
-                            {/* CV Section: Upload or Build */}
+                            {/* CV Section */}
                             <div className="space-y-4">
                                 <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Professional Profile (CV)</label>
                                 
                                 <div className="p-8 rounded-[2rem] border-2 border-dashed border-slate-100 bg-slate-50/50">
                                     {!hasCV ? (
                                         <div className="space-y-6 text-center">
-                                            {/* Option 1: Upload Component */}
                                             <div className="flex flex-col items-center">
-                                                <CVUpload onUploadSuccess={() => setHasCV(true)} />
+                                                <CVUpload onUploadSuccess={handleCVUploadSuccess} />
                                             </div>
 
-                                            {/* Divider */}
                                             <div className="flex items-center gap-4 py-2">
                                                 <div className="h-[1px] bg-slate-200 flex-1"></div>
                                                 <span className="text-[9px] font-black text-slate-300 uppercase tracking-[0.3em]">OR</span>
                                                 <div className="h-[1px] bg-slate-200 flex-1"></div>
                                             </div>
 
-                                            {/* Option 2: Navigate to Builder */}
                                             <div className="flex flex-col items-center gap-3">
                                                 <div className="flex items-center gap-2 text-slate-500">
                                                     <AlertCircle size={14} className="text-orange-400" />
@@ -109,12 +154,12 @@ const InterviewSetup = () => {
                                         </div>
                                     ) : (
                                         <div className="flex flex-col items-center py-4">
-                                            <div className="bg-green-50 text-green-600 p-4 rounded-2xl flex items-center gap-3 mb-4 w-full">
+                                            <div className="bg-green-50 text-green-600 p-4 rounded-2xl flex items-center gap-3 mb-4 w-full justify-center">
                                                 <CheckCircle size={20} />
                                                 <span className="text-xs font-black uppercase tracking-widest">CV Profile Loaded Successfully</span>
                                             </div>
                                             <button 
-                                                onClick={() => setHasCV(false)} 
+                                                onClick={() => { setHasCV(false); setCvText(""); }} 
                                                 className="text-[9px] font-black text-slate-400 uppercase tracking-widest hover:text-orange-500 transition-colors"
                                             >
                                                 Change CV or use builder
@@ -137,15 +182,25 @@ const InterviewSetup = () => {
                                     />
                                     <button 
                                         onClick={handleGithubSync} 
-                                        className="bg-slate-900 text-white px-8 rounded-2xl font-black text-[10px] uppercase hover:bg-blue-600 transition-all shadow-lg active:scale-95"
+                                        disabled={isSyncing}
+                                        className="bg-slate-900 text-white px-8 rounded-2xl font-black text-[10px] uppercase hover:bg-blue-600 transition-all shadow-lg active:scale-95 disabled:bg-slate-400"
                                     >
                                         {isSyncing ? <Loader2 className="animate-spin" /> : "Sync"}
                                     </button>
                                 </div>
+                                
+                                {syncedRepos.length > 0 && (
+                                    <div className="mt-3 p-4 bg-slate-50 rounded-2xl max-h-32 overflow-y-auto text-xs space-y-1">
+                                        <p className="text-[9px] font-black text-slate-400 uppercase">Synced Repos ({syncedRepos.length}):</p>
+                                        {syncedRepos.slice(0, 3).map((repo, idx) => (
+                                            <div key={idx} className="text-slate-600 font-bold">📂 {repo.name}</div>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
                         </div>
 
-                        {/* STEP 2: DOMAIN & DIFFICULTY (ROLE SECOND) */}
+                        {/* STEP 2: DOMAIN & DIFFICULTY */}
                         <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm space-y-8">
                             <div className="flex items-center gap-4 border-b border-slate-50 pb-6">
                                 <span className="bg-slate-900 text-white w-8 h-8 rounded-full flex items-center justify-center text-xs font-black">02</span>
@@ -206,7 +261,9 @@ const InterviewSetup = () => {
                                 </div>
                                 <div className="flex justify-between items-end border-b border-white/10 pb-4">
                                     <span className="text-[10px] font-bold opacity-70 uppercase tracking-widest">Job Role</span>
-                                    <span className="text-xl font-black italic tracking-tighter uppercase">{selectedRole === 'QA' ? 'QA Engineer' : 'Full-Stack'}</span>
+                                    <span className="text-xl font-black italic tracking-tighter uppercase">
+                                        {selectedRole === 'QA' ? 'QA Engineer' : 'Full-Stack'}
+                                    </span>
                                 </div>
                                 <div className="flex justify-between items-end border-b border-white/10 pb-4">
                                     <span className="text-[10px] font-bold opacity-70 uppercase tracking-widest">Difficulty</span>
@@ -216,9 +273,14 @@ const InterviewSetup = () => {
 
                             <button 
                                 onClick={handleStartInterview}
-                                className="group w-full bg-white text-blue-600 py-6 rounded-[2rem] font-black text-lg uppercase tracking-tighter hover:bg-slate-900 hover:text-white transition-all shadow-2xl flex items-center justify-center gap-3 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                                disabled={isLaunching}
+                                className="group w-full bg-white text-blue-600 py-6 rounded-[2rem] font-black text-lg uppercase tracking-tighter hover:bg-slate-900 hover:text-white transition-all shadow-2xl flex items-center justify-center gap-3 active:scale-95 disabled:bg-slate-200 disabled:text-slate-400"
                             >
-                                Launch AI Interview <ChevronRight size={20} className="group-hover:translate-x-1 transition-transform" />
+                                {isLaunching ? (
+                                    <>Initializing... <Loader2 className="animate-spin" size={20} /></>
+                                ) : (
+                                    <>Launch AI Interview <ChevronRight size={20} className="group-hover:translate-x-1 transition-transform" /></>
+                                )}
                             </button>
                             
                             <p className="text-[9px] text-center mt-6 font-bold uppercase tracking-widest opacity-40 leading-relaxed">

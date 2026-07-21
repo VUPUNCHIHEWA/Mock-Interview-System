@@ -1,31 +1,79 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import axios from 'axios';
 import { 
-  User, Mail, GraduateCap, Briefcase, 
-  Github, Linkedin, Save, Camera, 
+        User, Mail, GraduationCap, Briefcase, 
+        Save, Camera, 
   CheckCircle2, ChevronRight 
 } from 'lucide-react';
+import { FaGithub, FaLinkedin } from 'react-icons/fa';
 
 const Profile = () => {
-    
+    const userId = localStorage.getItem("userId");
+
     const [user, setUser] = useState({
-        name: "Vishwani Umesha",
-        email: "vishwani@example.com",
-        university: "General Sir John Kotelawala Defence University",
-        degree: "BSc (Hons) in Information Technology",
+        name: "",
+        email: "",
+        university: "",
+        degree: "",
         role: "Software Quality Assurance (QA) Intern",
-        github: "github.com/vishwani-u",
-        linkedin: "linkedin.com/in/vishwani-umesha"
+        github: "",
+        linkedin: ""
     });
 
     const [isSaving, setIsSaving] = useState(false);
 
-    const handleSave = () => {
+    useEffect(() => {
+        const loadProfile = async () => {
+            if (!userId) return;
+
+            try {
+                const response = await axios.get(`http://127.0.0.1:8000/profile/${userId}`);
+                const profile = response.data;
+
+                setUser((prev) => ({
+                    ...prev,
+                    name: profile.full_name || prev.name,
+                    email: profile.email || prev.email,
+                    university: profile.university || prev.university,
+                    degree: profile.degree || prev.degree,
+                    role: profile.role || prev.role,
+                    github: profile.github || prev.github,
+                    linkedin: profile.linkedin || prev.linkedin,
+                }));
+            } catch (error) {
+                console.error("Failed to load profile:", error);
+            }
+        };
+
+        loadProfile();
+    }, [userId]);
+
+    const handleSave = async () => {
+        if (!userId) {
+            alert("Please login first");
+            return;
+        }
+
         setIsSaving(true);
-        
-        setTimeout(() => {
-            setIsSaving(false);
+
+        try {
+            await axios.post(`http://127.0.0.1:8000/profile/${userId}`, {
+                full_name: user.name,
+                email: user.email,
+                university: user.university,
+                degree: user.degree,
+                role: user.role,
+                github: user.github,
+                linkedin: user.linkedin,
+            });
+
             alert("Profile Updated Successfully! ✅");
-        }, 1500);
+        } catch (error) {
+            console.error("Profile save failed:", error);
+            alert(error.response?.data?.detail || "Failed to update profile");
+        } finally {
+            setIsSaving(false);
+        }
     };
 
     return (
@@ -117,7 +165,7 @@ const Profile = () => {
                             </h4>
                             <div className="space-y-4">
                                 <div className="flex gap-4 items-center bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                                    <div className="bg-white p-2 rounded-xl shadow-sm text-blue-600"><GraduateCap size={20}/></div>
+                                    <div className="bg-white p-2 rounded-xl shadow-sm text-blue-600"><GraduationCap size={20}/></div>
                                     <div className="flex-1">
                                         <p className="text-[10px] font-black text-slate-400 uppercase">University</p>
                                         <p className="text-sm font-bold text-slate-800">KDU Sri Lanka</p>
@@ -142,11 +190,11 @@ const Profile = () => {
                         {/* Social Connections */}
                         <div className="space-y-6 pt-4 border-t border-slate-50">
                             <h4 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] flex items-center gap-2">
-                                <Github size={14} /> Social Profiles
+                                <FaGithub size={14} /> Social Profiles
                             </h4>
                             <div className="grid grid-cols-1 gap-4">
                                 <div className="flex items-center gap-3 bg-slate-900 text-white p-4 rounded-2xl border border-slate-800">
-                                    <Github size={20} />
+                                    <FaGithub size={20} />
                                     <input 
                                         type="text" 
                                         value={user.github}
@@ -155,10 +203,11 @@ const Profile = () => {
                                     />
                                 </div>
                                 <div className="flex items-center gap-3 bg-[#0077B5] text-white p-4 rounded-2xl">
-                                    <Linkedin size={20} />
+                                    <FaLinkedin size={20} />
                                     <input 
                                         type="text" 
                                         value={user.linkedin}
+                                            onChange={(e) => setUser({...user, linkedin: e.target.value})}
                                         className="bg-transparent border-none p-0 text-sm font-bold focus:ring-0 w-full"
                                     />
                                 </div>

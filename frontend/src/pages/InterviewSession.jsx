@@ -1,130 +1,362 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { 
-    Mic, MicOff, Video, VideoOff, 
-    MessageSquare, ShieldCheck, Clock, ChevronRight, PhoneOff 
-} from 'lucide-react';
+import axios from 'axios';
+import { Camera, Mic, Send, AlertTriangle, CheckCircle, User, Bot, Loader2 } from 'lucide-react';
 
 const InterviewSession = () => {
     const location = useLocation();
     const navigate = useNavigate();
-    
-    
-    const { role, difficulty, github, cvStatus } = location.state || { 
-        role: "QA", difficulty: "Medium" 
+
+    const { sessionId, firstQuestion, role, difficulty, github, cvStatus } = location.state || {
+        sessionId: "demo_session",
+        firstQuestion: null,
+        role: "Software QA Engineer",
+        difficulty: "Medium",
+        github: "N/A",
+        cvStatus: false
     };
 
+    // States
+    const [userAnswer, setUserAnswer] = useState("");
     const [isMuted, setIsMuted] = useState(false);
-    const [isVideoOff, setIsVideoOff] = useState(false);
-    const [timeLeft, setTimeLeft] = useState(1800); // විනාඩි 30ක timer එකක්
+    const [isCameraOn, setIsCameraOn] = useState(true);
+    const [cameraError, setCameraError] = useState(false);
+    const [isWaitingForAi, setIsWaitingForAi] = useState(false);
 
-    // Timer Logic
+    // Refs
+    const videoRef = useRef(null);
+    const streamRef = useRef(null);
+    const chatEndRef = useRef(null);
+    const canvasRef = useRef(null); 
+    const captureIntervalRef = useRef(null); 
+
+    // 🎙️ Audio Recording Refs
+    const mediaRecorderRef = useRef(null);
+    const audioChunksRef = useRef([]);
+
+    const [chatHistory, setChatHistory] = useState([
+        {
+            sender: "ai",
+            text: `Welcome to your AI Mock Interview! I have analyzed your background. Let's start the ${role} (${difficulty} level) session. Here is your first question:`
+        },
+        {
+            sender: "ai",
+            text: firstQuestion || (role.includes("QA") 
+                ? "Can you explain the difference between Smoke Testing and Sanity Testing with a practical example?" 
+                : "Explain how Dependency Injection works in Spring Boot and why we use it.")
+        }
+    ]);
+
     useEffect(() => {
-        const timer = setInterval(() => {
-            setTimeLeft((prev) => (prev > 0 ? prev - 1 : 0));
-        }, 1000);
-        return () => clearInterval(timer);
+        chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [chatHistory]);
+
+    // 📸 Visual Frame Capture Logic (1-second intervals)
+    const captureVisualFrame = () => {
+        if (videoRef.current && canvasRef.current && isCameraOn) {
+            const video = videoRef.current;
+            const canvas = canvasRef.current;
+            const ctx = canvas.getContext('2d');
+
+            canvas.width = video.videoWidth || 400;
+            canvas.height = video.videoHeight || 400;
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            const base64Frame = canvas.toDataURL('image/jpeg', 0.6);
+            console.log(`[Visual Log] Frame Captured for Session: ${sessionId}`, base64Frame.substring(0, 60) + "...");
+            
+            // Python ML Backend එකට Frame එක Stream කිරීමට අවශ්‍ය නම්:
+            /*
+            axios.post("http://localhost:8000/api/analyze-visual", {
+                sessionId: sessionId,
+                frame: base64Frame
+            }).catch(err => console.error("Visual API Error:", err));
+            */
+        }
+    };
+
+    useEffect(() => {
+        if (isCameraOn) {
+            captureIntervalRef.current = setInterval(captureVisualFrame, 1000);
+        } else {
+            if (captureIntervalRef.current) clearInterval(captureIntervalRef.current);
+        }
+        return () => {
+            if (captureIntervalRef.current) clearInterval(captureIntervalRef.current);
+        };
+    }, [isCameraOn]);
+
+
+    // 🎙️ Safe Audio Recording Function (Isolates Audio Tracks to prevent NotSupportedError)
+    const startAudioRecording = (stream) => {
+        try {
+            audioChunksRef.current = []; 
+
+            // 🛠️ CRITICAL FIX: වීඩියෝ ස්ට්‍රීම් එකෙන් ඕඩියෝ ට්‍රැක් එක විතරක් වෙන් කරලා පිරිසිදු ඕඩියෝ ස්ට්‍රීම් එකක් හදනවා
+            const audioTracks = stream.getAudioTracks();
+            if (audioTracks.length === 0) {
+                console.error("[Vocal Log] No audio tracks found in stream.");
+                return;
+            }
+            const audioOnlyStream = new MediaStream(audioTracks);
+
+            // බ්‍රවුසර් එක සපෝර්ට් කරන හොඳම mimeType එක තෝරාගැනීම
+            let options = { mimeType: 'audio/webm;codecs=opus' };
+            
+            if (!MediaRecorder.isTypeSupported(options.mimeType)) options = { mimeType: 'audio/webm' };
+            if (!MediaRecorder.isTypeSupported(options.mimeType)) options = { mimeType: 'audio/ogg;codecs=opus' };
+            if (!MediaRecorder.isTypeSupported(options.mimeType)) options = { mimeType: 'audio/mp4' };
+            if (!MediaRecorder.isTypeSupported(options.mimeType)) options = {}; // Fallback to browser default
+
+            console.log(`[Vocal Log] Selected MimeType: ${options.mimeType || 'Default'}`);
+
+            // රෙකෝඩර් එකට දෙන්නේ අර වෙන් කරගත්තු audioOnlyStream එකයි
+            const mediaRecorder = new MediaRecorder(audioOnlyStream, options);
+            mediaRecorderRef.current = mediaRecorder;
+
+            mediaRecorder.ondataavailable = (event) => {
+                if (event.data && event.data.size > 0) {
+                    audioChunksRef.current.push(event.data);
+                }
+            };
+
+            // ස්ට්‍රීම් එක ස්ටේබල් වෙනකල් තත්පර බාගයක් (500ms) ඉඳලා ස්ටාර්ට් කරනවා
+            setTimeout(() => {
+                if (mediaRecorderRef.current && mediaRecorderRef.current.state === "inactive") {
+                    mediaRecorderRef.current.start(1000); // Record chunks every 1 second
+                    console.log("[Vocal Log] Audio recording started safely in background...");
+                }
+            }, 500);
+
+        } catch (err) {
+            console.error("Failed to start Audio Recording:", err);
+        }
+    };
+
+    // 🎥 Hardware Access (Webcam & Microphone)
+    const startWebcam = async (includeVideo = true) => {
+        try {
+            setCameraError(false);
+            const constraints = {
+                video: includeVideo ? { width: 400, height: 400, facingMode: "user" } : false,
+                audio: true
+            };
+
+            const stream = await navigator.mediaDevices.getUserMedia(constraints);
+            streamRef.current = stream;
+            
+            if (videoRef.current && includeVideo) {
+                videoRef.current.srcObject = stream;
+            }
+
+            const audioTrack = stream.getAudioTracks()[0];
+            if (audioTrack) {
+                audioTrack.enabled = !isMuted;
+            }
+
+            // ඕඩියෝ කැප්චර් ලොජික් එක ස්ටාර්ට් කිරීම
+            startAudioRecording(stream);
+
+        } catch (err) {
+            console.error("Error accessing hardware:", err);
+            setCameraError(true);
+        }
+    };
+
+    useEffect(() => {
+        startWebcam(true);
+        return () => {
+            if (streamRef.current) {
+                streamRef.current.getTracks().forEach(track => track.stop());
+            }
+        };
     }, []);
 
-    const formatTime = (seconds) => {
-        const mins = Math.floor(seconds / 60);
-        const secs = seconds % 60;
-        return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+    const toggleCamera = async () => {
+        if (isCameraOn) {
+            if (streamRef.current) {
+                const videoTrack = streamRef.current.getVideoTracks()[0];
+                if (videoTrack) videoTrack.stop();
+            }
+            setIsCameraOn(false);
+        } else {
+            await startWebcam(true);
+            setIsCameraOn(true);
+        }
+    };
+
+    const toggleMute = () => {
+        if (streamRef.current) {
+            const audioTrack = streamRef.current.getAudioTracks()[0];
+            if (audioTrack) {
+                audioTrack.enabled = !audioTrack.enabled;
+                setIsMuted(!audioTrack.enabled);
+            }
+        }
+    };
+
+
+    // 🚀 Handles Submitting text answer + stopping audio and building FormData
+    const handleAnswerSubmit = async (e) => {
+        e.preventDefault();
+        if (!userAnswer.trim() || isWaitingForAi) return;
+
+        const currentAnswer = userAnswer;
+        setUserAnswer(""); 
+
+        const newUserMessage = { sender: "user", text: currentAnswer };
+        setChatHistory(prev => [...prev, newUserMessage]);
+        setIsWaitingForAi(true);
+
+        // 🎙️ 1. බැක්ග්‍රවුන්ඩ් ඕඩියෝ රෙකෝඩින් එක නවත්වනවා
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+            mediaRecorderRef.current.onstop = async () => {
+                
+                // 2. ඕඩියෝ බ්ලොබ් එක සාදා ගැනීම
+                const audioBlob = new Blob(audioChunksRef.current, { type: mediaRecorderRef.current.mimeType || 'audio/webm' });
+                console.log(`[Vocal Log] Audio Blob Created. Size: ${audioBlob.size} bytes`);
+
+                // 3. FormData එකක් සාදා සියල්ල ඇතුළත් කිරීම
+                const formData = new FormData();
+                formData.append("sessionId", sessionId);
+                formData.append("message", currentAnswer);
+                formData.append("audioFile", audioBlob, `vocal_${sessionId}.webm`);
+
+                try {
+                    // 4. Backend Chat Endpoint එකට FormData එක යැවීම
+                    const response = await axios.post("http://localhost:8000/api/chat-interview", formData, {
+                        headers: { 'Content-Type': 'multipart/form-data' }
+                    });
+
+                    if (response.data.success) {
+                        setChatHistory(prev => [...prev, { sender: "ai", text: response.data.nextQuestion }]);
+                    } else {
+                        setChatHistory(prev => [...prev, { sender: "ai", text: "Sorry, I couldn't process that response." }]);
+                    }
+                } catch (error) {
+                    console.error("Failed to communicate with backend:", error);
+                    setChatHistory(prev => [...prev, { sender: "ai", text: "Connection error. Please check your backend server." }]);
+                } finally {
+                    setIsWaitingForAi(false);
+                    // 5. ඊළඟ ප්‍රශ්නයට පිළිතුරු දීමට නැවත බැක්ග්‍රවුන්ඩ් රෙකෝඩින් එක ස්ටාර්ට් කිරීම
+                    if (streamRef.current) {
+                        startAudioRecording(streamRef.current);
+                    }
+                }
+            };
+
+            mediaRecorderRef.current.stop(); 
+        } else {
+            setIsWaitingForAi(false);
+        }
     };
 
     return (
-        <div className="min-h-screen bg-slate-950 text-white p-4 md:p-8 font-sans">
-            <div className="max-w-7xl mx-auto h-[90vh] flex flex-col">
-                
-                {/* Upper Bar */}
-                <div className="flex justify-between items-center mb-6 bg-slate-900/50 p-4 rounded-2xl border border-white/5">
-                    <div className="flex items-center gap-4">
-                        <div className="bg-blue-600 px-4 py-1 rounded-full text-[10px] font-black uppercase tracking-widest">
-                            Live Session
-                        </div>
-                        <span className="text-slate-400 text-xs font-bold uppercase tracking-tighter">
-                            Role: <span className="text-white italic">{role}</span>
-                        </span>
+        <div className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-6 flex flex-col">
+            
+            <canvas ref={canvasRef} className="hidden" />
+
+            {/* TOP BAR */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 mb-6 flex flex-wrap justify-between items-center gap-4 shadow-xl">
+                <div>
+                    <span className="text-[10px] font-black tracking-widest text-blue-400 uppercase">Live Session</span>
+                    <h2 className="text-xl font-black uppercase tracking-tight italic">{role}</h2>
+                </div>
+                <div className="flex gap-3 text-xs">
+                    <div className="bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-700">
+                        <span className="text-slate-400">Level:</span> <strong className="text-orange-400">{difficulty}</strong>
                     </div>
-                    
-                    <div className="flex items-center gap-3 text-orange-400 font-mono font-bold">
-                        <Clock size={16} /> {formatTime(timeLeft)}
+                    <div className="bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-700">
+                        <span className="text-slate-400">GitHub:</span> <strong className="text-green-400">{github}</strong>
                     </div>
                 </div>
+            </div>
 
-                {/* Main Grid: AI Humanoid & User Camera */}
-                <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 overflow-hidden">
-                    
-                    {/* Left: AI Interviewer Placeholder */}
-                    <div className="lg:col-span-8 bg-slate-900 rounded-[3rem] border border-white/5 relative overflow-hidden flex items-center justify-center shadow-2xl shadow-blue-900/10">
-                        <div className="text-center space-y-4">
-                            <div className="w-32 h-32 bg-blue-600/10 rounded-full mx-auto flex items-center justify-center border border-blue-500/20 animate-pulse">
-                                <ShieldCheck size={48} className="text-blue-500" />
+            {/* MAIN CONTENT AREA */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1">
+                {/* LEFT SIDE: Chat Interface */}
+                <div className="lg:col-span-8 bg-slate-900 rounded-[2rem] border border-slate-800 p-6 flex flex-col h-[70vh] shadow-2xl">
+                    <div className="flex-1 overflow-y-auto space-y-4 pr-2 mb-4 scrollbar-thin">
+                        {chatHistory.map((msg, index) => (
+                            <div key={index} className={`flex items-start gap-3 max-w-[85%] ${msg.sender === 'user' ? 'ml-auto flex-row-reverse' : ''}`}>
+                                <div className={`p-2 rounded-xl border ${msg.sender === 'user' ? 'bg-blue-600 border-blue-500 text-white' : 'bg-slate-800 border-slate-700 text-blue-400'}`}>
+                                    {msg.sender === 'user' ? <User size={18} /> : <Bot size={18} />}
+                                </div>
+                                <div className={`p-4 rounded-2xl text-sm font-medium leading-relaxed shadow-md ${
+                                    msg.sender === 'user' ? 'bg-blue-600/20 border border-blue-500/30 text-blue-100 rounded-tr-none' : 'bg-slate-800/50 border border-slate-850 text-slate-200 rounded-tl-none'
+                                }`}>
+                                    {msg.text}
+                                </div>
                             </div>
-                            <h3 className="text-slate-500 font-black uppercase tracking-[0.4em] text-xs">AI Interviewer</h3>
-                            <p className="text-sm font-medium text-slate-400 italic">"Waiting for your response..."</p>
+                        ))}
+
+                        {isWaitingForAi && (
+                            <div className="flex items-start gap-3 max-w-[85%]">
+                                <div className="p-2 rounded-xl border bg-slate-800 border-slate-700 text-blue-400"><Bot size={18} /></div>
+                                <div className="p-4 rounded-2xl text-sm font-medium bg-slate-800/30 border border-slate-850 text-slate-400 rounded-tl-none flex items-center gap-2">
+                                    <Loader2 className="animate-spin text-blue-500" size={16} />
+                                    <span>Gemini is analyzing your vocal & textual response...</span>
+                                </div>
+                            </div>
+                        )}
+                        <div ref={chatEndRef} />
+                    </div>
+
+                    <form onSubmit={handleAnswerSubmit} className="relative mt-auto">
+                        <textarea 
+                            value={userAnswer}
+                            onChange={(e) => setUserAnswer(e.target.value)}
+                            disabled={isWaitingForAi}
+                            placeholder={isWaitingForAi ? "Please wait until Gemini responds..." : "Type your detailed answer here..."}
+                            rows="2"
+                            className="w-full bg-slate-950 border border-slate-800 rounded-2xl py-4 pl-5 pr-16 text-sm text-slate-200 placeholder-slate-500 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none transition-all disabled:opacity-50"
+                        />
+                        <button type="submit" disabled={isWaitingForAi || !userAnswer.trim()} className="absolute right-3 bottom-4 bg-blue-600 text-white p-3 rounded-xl hover:bg-blue-500 active:scale-95 transition-all disabled:bg-slate-800">
+                            <Send size={16} />
+                        </button>
+                    </form>
+                </div>
+
+                {/* RIGHT SIDE: Live Camera Preview */}
+                <div className="lg:col-span-4 space-y-6">
+                    <div className="bg-slate-900 border border-slate-800 rounded-[2rem] p-4 shadow-xl overflow-hidden relative aspect-video lg:aspect-square flex flex-col justify-center items-center">
+                        {!cameraError ? (
+                            <div className="w-full h-full rounded-2xl bg-slate-950 border border-slate-850 relative overflow-hidden flex items-center justify-center">
+                                <video ref={videoRef} autoPlay playsInline muted className={`w-full h-full object-cover rounded-2xl scale-x-[-1] ${!isCameraOn ? 'hidden' : ''}`} />
+                                {!isCameraOn && (
+                                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950">
+                                        <User size={48} className="text-slate-800 animate-pulse" />
+                                        <span className="text-[11px] font-bold text-slate-500 mt-2">Camera Hardware Off</span>
+                                    </div>
+                                )}
+                                <div className="absolute top-3 left-3 bg-red-600 text-[9px] font-black uppercase px-2 py-0.5 rounded-md tracking-widest animate-pulse flex items-center gap-1 z-10">
+                                    <span className="w-1.5 h-1.5 bg-white rounded-full"></span> {isMuted ? "REC - MUTED" : "LIVE REC"}
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="text-center p-6">
+                                <AlertTriangle className="mx-auto text-orange-500 mb-2" size={32} />
+                                <p className="text-xs text-slate-400 font-bold uppercase">Webcam Access Denied</p>
+                            </div>
+                        )}
+
+                        <div className="flex gap-3 mt-4 w-full justify-center">
+                            <button onClick={toggleCamera} className={`p-3 rounded-xl border text-xs font-bold transition-all active:scale-95 flex-1 flex items-center justify-center gap-2 ${isCameraOn ? 'bg-slate-800 border-slate-700 text-slate-300' : 'bg-red-950/40 text-red-400'}`}>
+                                <Camera size={16} /> {isCameraOn ? "Turn Off" : "Turn On"}
+                            </button>
+                            <button onClick={toggleMute} className={`p-3 rounded-xl border text-xs font-bold transition-all active:scale-95 flex-1 flex items-center justify-center gap-2 ${!isMuted ? 'bg-slate-800 border-slate-700 text-slate-300' : 'bg-red-950/40 text-red-400'}`}>
+                                <Mic size={16} /> {!isMuted ? "Mute Mic" : "Unmute Mic"}
+                            </button>
                         </div>
                     </div>
 
-                    {/* Right: User Perspective & Transcript */}
-                    <div className="lg:col-span-4 flex flex-col gap-6">
-                        {/* User Camera Preview */}
-                        <div className="h-1/2 bg-slate-800 rounded-[2.5rem] border border-white/5 relative overflow-hidden group">
-                            {!isVideoOff ? (
-                                <div className="absolute inset-0 bg-slate-700 animate-pulse flex items-center justify-center">
-                                    <span className="text-[10px] font-black uppercase opacity-20 tracking-widest">Camera Stream</span>
-                                </div>
-                            ) : (
-                                <div className="absolute inset-0 flex items-center justify-center bg-slate-900">
-                                    <VideoOff size={32} className="text-slate-700" />
-                                </div>
-                            )}
-                            <div className="absolute bottom-4 left-4 bg-black/40 backdrop-blur-md px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-widest">
-                                You (Candidate)
-                            </div>
-                        </div>
-
-                        {/* Speech Transcript Preview */}
-                        <div className="h-1/2 bg-slate-900/50 rounded-[2.5rem] border border-white/5 p-6 space-y-4 overflow-y-auto">
-                            <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-500 border-b border-white/5 pb-2">Real-time Transcript</h4>
-                            <div className="space-y-4">
-                                <p className="text-xs text-blue-400 font-medium leading-relaxed">AI: Could you explain how you've used Postman for API automation?</p>
-                                <div className="flex gap-2">
-                                    <div className="w-1 h-1 bg-blue-500 rounded-full animate-bounce"></div>
-                                    <div className="w-1 h-1 bg-blue-500 rounded-full animate-bounce [animation-delay:-.3s]"></div>
-                                    <div className="w-1 h-1 bg-blue-500 rounded-full animate-bounce [animation-delay:-.5s]"></div>
-                                </div>
-                            </div>
-                        </div>
+                    <div className="bg-blue-950/20 border border-blue-900/30 rounded-2xl p-4 text-xs flex gap-3 items-start">
+                        <CheckCircle className="text-blue-400 shrink-0 mt-0.5" size={16} />
+                        <p className="text-blue-200/80 leading-relaxed">
+                            <strong>Multimodal Framework Note:</strong> Keep your camera centered. The AI system will evaluate behavioral indicators, facial parameters, and structural confidence markers.
+                        </p>
                     </div>
                 </div>
-
-                {/* Bottom Controls */}
-                <div className="mt-6 flex justify-center items-center gap-4">
-                    <button 
-                        onClick={() => setIsMuted(!isMuted)}
-                        className={`p-5 rounded-2xl transition-all shadow-lg active:scale-95 ${isMuted ? 'bg-red-500 text-white' : 'bg-slate-800 text-white hover:bg-slate-700 border border-white/5'}`}
-                    >
-                        {isMuted ? <MicOff size={24} /> : <Mic size={24} />}
-                    </button>
-                    
-                    <button 
-                        onClick={() => setIsVideoOff(!isVideoOff)}
-                        className={`p-5 rounded-2xl transition-all shadow-lg active:scale-95 ${isVideoOff ? 'bg-red-500 text-white' : 'bg-slate-800 text-white hover:bg-slate-700 border border-white/5'}`}
-                    >
-                        {isVideoOff ? <VideoOff size={24} /> : <Video size={24} />}
-                    </button>
-
-                    <button 
-                        onClick={() => {
-                            if(window.confirm("Are you sure you want to end the session?")) navigate('/dashboard');
-                        }}
-                        className="group bg-red-600 hover:bg-red-700 text-white px-10 py-5 rounded-3xl font-black uppercase text-xs tracking-[0.2em] transition-all shadow-xl shadow-red-900/20 active:scale-95 flex items-center gap-2"
-                    >
-                        <PhoneOff size={18} /> End Interview
-                    </button>
-                </div>
-
             </div>
         </div>
     );

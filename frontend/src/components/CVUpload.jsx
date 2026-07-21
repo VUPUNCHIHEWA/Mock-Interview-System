@@ -2,30 +2,43 @@ import React, { useState } from 'react';
 import axios from 'axios';
 import { UploadCloud } from 'lucide-react';
 
-const CVUpload = () => {
-    const [file, setFile] = useState(null);
+const CVUpload = ({ onUploadSuccess }) => {
     const [loading, setLoading] = useState(false);
 
     const handleUpload = async (e) => {
         const selectedFile = e.target.files[0];
         if (!selectedFile) return;
 
+        if (selectedFile.type !== "application/pdf") {
+            alert("Please upload a PDF file only.");
+            return;
+        }
+
         const formData = new FormData();
-        formData.append('file', selectedFile);
+        formData.append('cvFile', selectedFile); 
 
         setLoading(true);
         try {
-            await axios.post('http://127.0.0.1:8000/upload-cv', formData);
-            alert("CV Uploaded and Analyzed!");
+            const response = await axios.post('http://localhost:8000/api/upload-cv', formData, {
+                headers: {
+                    'Content-Type': 'multipart/form-data'
+                }
+            });
+
+            if (response.data.success) {
+                onUploadSuccess(response.data.extracted_text);
+                alert("CV Uploaded and Parsed Successfully!");
+            }
         } catch (error) {
-            alert("Error uploading file");
+            console.error("Upload failed:", error);
+            alert(error.response?.data?.detail || "Error uploading file. Check if backend is running.");
         } finally {
             setLoading(false);
         }
     };
 
     return (
-        <div className="relative border-2 border-dashed border-blue-200 rounded-xl p-8 transition hover:bg-blue-50 group">
+        <div className="relative border-2 border-dashed border-blue-200 rounded-xl p-8 transition hover:bg-blue-50 group w-full">
             <input 
                 type="file" 
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"

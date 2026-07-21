@@ -10,6 +10,8 @@ function Signup() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [targetRole, setTargetRole] = useState("Software Engineer");
+  const [experienceLevel, setExperienceLevel] = useState("Entry Level");
 
   const handleSignup = async (e) => {
     e.preventDefault();
@@ -19,7 +21,9 @@ function Signup() {
       await axios.post("http://127.0.0.1:8000/signup", {
         name: name,
         email: email,
-        password: password
+        password: password,
+        target_role: targetRole,
+        experience_level: experienceLevel
       });
 
       alert("Signup Successful!");
@@ -29,7 +33,7 @@ function Signup() {
     } catch (error) {
 
       console.error(error);
-      alert("Signup Failed");
+      alert(error.response?.data?.detail || error.response?.data?.message || "Signup Failed");
 
     }
   };
@@ -111,6 +115,45 @@ function Signup() {
               className="w-full mt-1 px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm md:text-base"
               required
             />
+          </div>
+
+          {/* Target Role */}
+          <div>
+            <label className="text-sm font-medium">
+              Target Role
+            </label>
+
+            <select
+              value={targetRole}
+              onChange={(e) => setTargetRole(e.target.value)}
+              className="w-full mt-1 px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm md:text-base bg-white"
+            >
+              <option>Software Engineer</option>
+              <option>Frontend Developer</option>
+              <option>Backend Developer</option>
+              <option>Full Stack Developer</option>
+              <option>QA Engineer</option>
+              <option>Data Analyst</option>
+              <option>DevOps Engineer</option>
+            </select>
+          </div>
+
+          {/* Experience Level */}
+          <div>
+            <label className="text-sm font-medium">
+              Experience Level
+            </label>
+
+            <select
+              value={experienceLevel}
+              onChange={(e) => setExperienceLevel(e.target.value)}
+              className="w-full mt-1 px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm md:text-base bg-white"
+            >
+              <option>Entry Level</option>
+              <option>Junior</option>
+              <option>Mid Level</option>
+              <option>Senior</option>
+            </select>
           </div>
 
           {/* Button */}
