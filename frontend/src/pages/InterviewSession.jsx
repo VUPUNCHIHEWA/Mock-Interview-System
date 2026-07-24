@@ -1,19 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { Camera, Mic, Send, AlertTriangle, CheckCircle, User, Bot, Loader2 } from 'lucide-react';
+import { Camera, Mic, Send, AlertTriangle, CheckCircle, User, Bot, Loader2, ChevronDown, ChevronUp, StopCircle } from 'lucide-react';
 
 const InterviewSession = () => {
     const location = useLocation();
     const navigate = useNavigate();
 
-    const { sessionId, firstQuestion, role, difficulty, github, cvStatus } = location.state || {
+    const { sessionId, firstQuestion, role, difficulty, github, cvStatus, interviewMode } = location.state || {
         sessionId: "demo_session",
         firstQuestion: null,
         role: "Software QA Engineer",
         difficulty: "Medium",
         github: "N/A",
-        cvStatus: false
+        cvStatus: false,
+        interviewMode: "MULTIMODAL"
     };
 
     // States
@@ -22,6 +23,8 @@ const InterviewSession = () => {
     const [isCameraOn, setIsCameraOn] = useState(true);
     const [cameraError, setCameraError] = useState(false);
     const [isWaitingForAi, setIsWaitingForAi] = useState(false);
+    const [isEnding, setIsEnding] = useState(false);
+    const [expandedFeedback, setExpandedFeedback] = useState({});
 
     // Refs
     const videoRef = useRef(null);
@@ -76,7 +79,7 @@ const InterviewSession = () => {
     };
 
     useEffect(() => {
-        if (isCameraOn) {
+        if (isCameraOn && interviewMode === "MULTIMODAL") {
             captureIntervalRef.current = setInterval(captureVisualFrame, 1000);
         } else {
             if (captureIntervalRef.current) clearInterval(captureIntervalRef.current);
@@ -84,7 +87,7 @@ const InterviewSession = () => {
         return () => {
             if (captureIntervalRef.current) clearInterval(captureIntervalRef.current);
         };
-    }, [isCameraOn]);
+    }, [isCameraOn, interviewMode]);
 
 
     // 🎙️ Safe Audio Recording Function (Isolates Audio Tracks to prevent NotSupportedError)
@@ -164,13 +167,15 @@ const InterviewSession = () => {
     };
 
     useEffect(() => {
-        startWebcam(true);
+        if (interviewMode === "MULTIMODAL") {
+            startWebcam(true);
+        }
         return () => {
             if (streamRef.current) {
                 streamRef.current.getTracks().forEach(track => track.stop());
             }
         };
-    }, []);
+    }, [interviewMode]);
 
     const toggleCamera = async () => {
         if (isCameraOn) {
@@ -208,6 +213,29 @@ const InterviewSession = () => {
         setChatHistory(prev => [...prev, newUserMessage]);
         setIsWaitingForAi(true);
 
+        if (interviewMode === "TEXT") {
+            try {
+                const response = await axios.post("http://localhost:8000/api/chat-interview", {
+                    sessionId: sessionId,
+                    message: currentAnswer
+                }, {
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                if (response.data.success) {
+                    setChatHistory(prev => [...prev, { sender: "ai", text: response.data.nextQuestion, evaluation: response.data.evaluation }]);
+                } else {
+                    setChatHistory(prev => [...prev, { sender: "ai", text: "Sorry, I couldn't process that response." }]);
+                }
+            } catch (error) {
+                console.error("Failed to communicate with backend:", error);
+                setChatHistory(prev => [...prev, { sender: "ai", text: "Connection error. Please check your backend server." }]);
+            } finally {
+                setIsWaitingForAi(false);
+            }
+            return;
+        }
+
         // 🎙️ 1. බැක්ග්‍රවුන්ඩ් ඕඩියෝ රෙකෝඩින් එක නවත්වනවා
         if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
             mediaRecorderRef.current.onstop = async () => {
@@ -229,7 +257,7 @@ const InterviewSession = () => {
                     });
 
                     if (response.data.success) {
-                        setChatHistory(prev => [...prev, { sender: "ai", text: response.data.nextQuestion }]);
+                        setChatHistory(prev => [...prev, { sender: "ai", text: response.data.nextQuestion, evaluation: response.data.evaluation }]);
                     } else {
                         setChatHistory(prev => [...prev, { sender: "ai", text: "Sorry, I couldn't process that response." }]);
                     }
@@ -251,6 +279,26 @@ const InterviewSession = () => {
         }
     };
 
+    const handleEndInterview = async () => {
+        if (!window.confirm("Are you sure you want to end the interview?")) return;
+        setIsEnding(true);
+        try {
+            const response = await axios.post("http://localhost:8000/api/end-interview", { sessionId });
+            if (response.data.success) {
+                navigate('/interview-results', { state: { results: response.data } });
+            }
+        } catch (error) {
+            console.error("Failed to end interview:", error);
+            alert("Error ending the interview.");
+        } finally {
+            setIsEnding(false);
+        }
+    };
+
+    const toggleFeedback = (index) => {
+        setExpandedFeedback(prev => ({ ...prev, [index]: !prev[index] }));
+    };
+
     return (
         <div className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-6 flex flex-col">
             
@@ -262,13 +310,20 @@ const InterviewSession = () => {
                     <span className="text-[10px] font-black tracking-widest text-blue-400 uppercase">Live Session</span>
                     <h2 className="text-xl font-black uppercase tracking-tight italic">{role}</h2>
                 </div>
-                <div className="flex gap-3 text-xs">
+                <div className="flex gap-3 text-xs items-center">
                     <div className="bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-700">
                         <span className="text-slate-400">Level:</span> <strong className="text-orange-400">{difficulty}</strong>
                     </div>
                     <div className="bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-700">
                         <span className="text-slate-400">GitHub:</span> <strong className="text-green-400">{github}</strong>
                     </div>
+                    <button 
+                        onClick={handleEndInterview} 
+                        disabled={isEnding}
+                        className="bg-red-600 hover:bg-red-500 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2 transition-all active:scale-95 disabled:opacity-50"
+                    >
+                        {isEnding ? <Loader2 className="animate-spin" size={14}/> : <StopCircle size={14}/>} End Interview
+                    </button>
                 </div>
             </div>
 
@@ -278,15 +333,36 @@ const InterviewSession = () => {
                 <div className="lg:col-span-8 bg-slate-900 rounded-[2rem] border border-slate-800 p-6 flex flex-col h-[70vh] shadow-2xl">
                     <div className="flex-1 overflow-y-auto space-y-4 pr-2 mb-4 scrollbar-thin">
                         {chatHistory.map((msg, index) => (
-                            <div key={index} className={`flex items-start gap-3 max-w-[85%] ${msg.sender === 'user' ? 'ml-auto flex-row-reverse' : ''}`}>
-                                <div className={`p-2 rounded-xl border ${msg.sender === 'user' ? 'bg-blue-600 border-blue-500 text-white' : 'bg-slate-800 border-slate-700 text-blue-400'}`}>
-                                    {msg.sender === 'user' ? <User size={18} /> : <Bot size={18} />}
+                            <div key={index} className="flex flex-col mb-4">
+                                <div className={`flex items-start gap-3 max-w-[85%] ${msg.sender === 'user' ? 'ml-auto flex-row-reverse' : ''}`}>
+                                    <div className={`p-2 rounded-xl border ${msg.sender === 'user' ? 'bg-blue-600 border-blue-500 text-white' : 'bg-slate-800 border-slate-700 text-blue-400'}`}>
+                                        {msg.sender === 'user' ? <User size={18} /> : <Bot size={18} />}
+                                    </div>
+                                    <div className={`p-4 rounded-2xl text-sm font-medium leading-relaxed shadow-md ${
+                                        msg.sender === 'user' ? 'bg-blue-600/20 border border-blue-500/30 text-blue-100 rounded-tr-none' : 'bg-slate-800/50 border border-slate-850 text-slate-200 rounded-tl-none'
+                                    }`}>
+                                        {msg.text}
+                                    </div>
                                 </div>
-                                <div className={`p-4 rounded-2xl text-sm font-medium leading-relaxed shadow-md ${
-                                    msg.sender === 'user' ? 'bg-blue-600/20 border border-blue-500/30 text-blue-100 rounded-tr-none' : 'bg-slate-800/50 border border-slate-850 text-slate-200 rounded-tl-none'
-                                }`}>
-                                    {msg.text}
-                                </div>
+                                {msg.evaluation && (
+                                    <div className={`mt-2 ml-14 max-w-[70%] bg-slate-800/40 border border-slate-700/50 rounded-xl overflow-hidden transition-all`}>
+                                        <button 
+                                            onClick={() => toggleFeedback(index)}
+                                            className="w-full flex items-center justify-between p-3 text-xs font-bold text-slate-400 hover:text-slate-200 transition-colors"
+                                        >
+                                            <span className="flex items-center gap-2">
+                                                <div className={`w-2 h-2 rounded-full ${msg.evaluation.score >= 80 ? 'bg-green-400' : msg.evaluation.score >= 60 ? 'bg-orange-400' : 'bg-red-400'}`}></div>
+                                                Instant Feedback (Score: {msg.evaluation.score})
+                                            </span>
+                                            {expandedFeedback[index] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                                        </button>
+                                        {expandedFeedback[index] && (
+                                            <div className="p-4 pt-0 text-sm text-slate-300 italic border-t border-slate-700/50">
+                                                {msg.evaluation.feedback}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                         ))}
 
@@ -319,43 +395,55 @@ const InterviewSession = () => {
 
                 {/* RIGHT SIDE: Live Camera Preview */}
                 <div className="lg:col-span-4 space-y-6">
-                    <div className="bg-slate-900 border border-slate-800 rounded-[2rem] p-4 shadow-xl overflow-hidden relative aspect-video lg:aspect-square flex flex-col justify-center items-center">
-                        {!cameraError ? (
-                            <div className="w-full h-full rounded-2xl bg-slate-950 border border-slate-850 relative overflow-hidden flex items-center justify-center">
-                                <video ref={videoRef} autoPlay playsInline muted className={`w-full h-full object-cover rounded-2xl scale-x-[-1] ${!isCameraOn ? 'hidden' : ''}`} />
-                                {!isCameraOn && (
-                                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950">
-                                        <User size={48} className="text-slate-800 animate-pulse" />
-                                        <span className="text-[11px] font-bold text-slate-500 mt-2">Camera Hardware Off</span>
+                    {interviewMode === "MULTIMODAL" ? (
+                        <>
+                            <div className="bg-slate-900 border border-slate-800 rounded-[2rem] p-4 shadow-xl overflow-hidden relative aspect-video lg:aspect-square flex flex-col justify-center items-center">
+                                {!cameraError ? (
+                                    <div className="w-full h-full rounded-2xl bg-slate-950 border border-slate-850 relative overflow-hidden flex items-center justify-center">
+                                        <video ref={videoRef} autoPlay playsInline muted className={`w-full h-full object-cover rounded-2xl scale-x-[-1] ${!isCameraOn ? 'hidden' : ''}`} />
+                                        {!isCameraOn && (
+                                            <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950">
+                                                <User size={48} className="text-slate-800 animate-pulse" />
+                                                <span className="text-[11px] font-bold text-slate-500 mt-2">Camera Hardware Off</span>
+                                            </div>
+                                        )}
+                                        <div className="absolute top-3 left-3 bg-red-600 text-[9px] font-black uppercase px-2 py-0.5 rounded-md tracking-widest animate-pulse flex items-center gap-1 z-10">
+                                            <span className="w-1.5 h-1.5 bg-white rounded-full"></span> {isMuted ? "REC - MUTED" : "LIVE REC"}
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="text-center p-6">
+                                        <AlertTriangle className="mx-auto text-orange-500 mb-2" size={32} />
+                                        <p className="text-xs text-slate-400 font-bold uppercase">Webcam Access Denied</p>
                                     </div>
                                 )}
-                                <div className="absolute top-3 left-3 bg-red-600 text-[9px] font-black uppercase px-2 py-0.5 rounded-md tracking-widest animate-pulse flex items-center gap-1 z-10">
-                                    <span className="w-1.5 h-1.5 bg-white rounded-full"></span> {isMuted ? "REC - MUTED" : "LIVE REC"}
+
+                                <div className="flex gap-3 mt-4 w-full justify-center">
+                                    <button onClick={toggleCamera} className={`p-3 rounded-xl border text-xs font-bold transition-all active:scale-95 flex-1 flex items-center justify-center gap-2 ${isCameraOn ? 'bg-slate-800 border-slate-700 text-slate-300' : 'bg-red-950/40 text-red-400'}`}>
+                                        <Camera size={16} /> {isCameraOn ? "Turn Off" : "Turn On"}
+                                    </button>
+                                    <button onClick={toggleMute} className={`p-3 rounded-xl border text-xs font-bold transition-all active:scale-95 flex-1 flex items-center justify-center gap-2 ${!isMuted ? 'bg-slate-800 border-slate-700 text-slate-300' : 'bg-red-950/40 text-red-400'}`}>
+                                        <Mic size={16} /> {!isMuted ? "Mute Mic" : "Unmute Mic"}
+                                    </button>
                                 </div>
                             </div>
-                        ) : (
-                            <div className="text-center p-6">
-                                <AlertTriangle className="mx-auto text-orange-500 mb-2" size={32} />
-                                <p className="text-xs text-slate-400 font-bold uppercase">Webcam Access Denied</p>
+
+                            <div className="bg-blue-950/20 border border-blue-900/30 rounded-2xl p-4 text-xs flex gap-3 items-start">
+                                <CheckCircle className="text-blue-400 shrink-0 mt-0.5" size={16} />
+                                <p className="text-blue-200/80 leading-relaxed">
+                                    <strong>Multimodal Framework Note:</strong> Keep your camera centered. The AI system will evaluate behavioral indicators, facial parameters, and structural confidence markers.
+                                </p>
                             </div>
-                        )}
-
-                        <div className="flex gap-3 mt-4 w-full justify-center">
-                            <button onClick={toggleCamera} className={`p-3 rounded-xl border text-xs font-bold transition-all active:scale-95 flex-1 flex items-center justify-center gap-2 ${isCameraOn ? 'bg-slate-800 border-slate-700 text-slate-300' : 'bg-red-950/40 text-red-400'}`}>
-                                <Camera size={16} /> {isCameraOn ? "Turn Off" : "Turn On"}
-                            </button>
-                            <button onClick={toggleMute} className={`p-3 rounded-xl border text-xs font-bold transition-all active:scale-95 flex-1 flex items-center justify-center gap-2 ${!isMuted ? 'bg-slate-800 border-slate-700 text-slate-300' : 'bg-red-950/40 text-red-400'}`}>
-                                <Mic size={16} /> {!isMuted ? "Mute Mic" : "Unmute Mic"}
-                            </button>
+                        </>
+                    ) : (
+                        <div className="bg-slate-900 border border-slate-800 rounded-[2rem] p-8 shadow-xl flex flex-col items-center justify-center h-full min-h-[300px] text-center">
+                            <Bot size={64} className="text-blue-500 mb-6 opacity-50" />
+                            <h3 className="text-lg font-black uppercase tracking-widest text-slate-300 mb-2">Text Mode Active</h3>
+                            <p className="text-sm text-slate-500 font-medium leading-relaxed">
+                                Camera and microphone are disabled.<br/>Focus on providing detailed written responses.
+                            </p>
                         </div>
-                    </div>
-
-                    <div className="bg-blue-950/20 border border-blue-900/30 rounded-2xl p-4 text-xs flex gap-3 items-start">
-                        <CheckCircle className="text-blue-400 shrink-0 mt-0.5" size={16} />
-                        <p className="text-blue-200/80 leading-relaxed">
-                            <strong>Multimodal Framework Note:</strong> Keep your camera centered. The AI system will evaluate behavioral indicators, facial parameters, and structural confidence markers.
-                        </p>
-                    </div>
+                    )}
                 </div>
             </div>
         </div>

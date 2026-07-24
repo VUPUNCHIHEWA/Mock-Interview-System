@@ -96,7 +96,10 @@ const Dashboard = () => {
                         </div>
                     </div>
 
-                    <button className="w-full bg-slate-900 text-white p-5 rounded-[2rem] font-bold flex items-center justify-between group hover:bg-blue-600 transition-all shadow-lg shadow-slate-200">
+                    <button 
+                        onClick={() => navigate('/history')}
+                        className="w-full bg-slate-900 text-white p-5 rounded-[2rem] font-bold flex items-center justify-between group hover:bg-blue-600 transition-all shadow-lg shadow-slate-200"
+                    >
                         <span className="text-sm">Full History</span>
                         <ArrowRight size={18} className="group-hover:translate-x-1 transition-transform" />
                     </button>

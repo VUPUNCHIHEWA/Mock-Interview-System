@@ -14,10 +14,8 @@ import Jobs from "./pages/Jobs";
 import VerifyOTP from "./pages/VerifyOTP";
 import InterviewSetup from './pages/InterviewSetup';
 import InterviewSession from './pages/InterviewSession';
+import InterviewResults from './pages/InterviewResults';
 import Profile from './pages/Profile';
-
-
-
 const MainLayout = ({ children }) => (
   <div className="flex min-h-screen bg-transparent text-slate-900">
     <Sidebar />
@@ -50,6 +48,7 @@ function App() {
         <Route path="/profile" element={<MainLayout><Profile /></MainLayout>} />
 
         <Route path="/interview-session" element={<InterviewSession />} />
+        <Route path="/interview-results" element={<MainLayout><InterviewResults /></MainLayout>} />
         
       </Routes>
     </BrowserRouter>
