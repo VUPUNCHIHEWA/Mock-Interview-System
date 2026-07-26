@@ -97,3 +97,15 @@ class InterviewResponse(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     session = relationship("InterviewSession", back_populates="responses")
+
+class VisualMetric(Base):
+    __tablename__ = "visual_metrics"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String(255), ForeignKey("interview_sessions.session_id", ondelete="CASCADE"), nullable=False)
+    confidence_score = Column(Float, default=0.0)
+    emotion = Column(String(50), nullable=True)
+    timestamp = Column(DateTime(timezone=True), server_default=func.now())
+    
+    session = relationship("InterviewSession")
+

@@ -25,6 +25,7 @@ const InterviewSession = () => {
     const [isWaitingForAi, setIsWaitingForAi] = useState(false);
     const [isEnding, setIsEnding] = useState(false);
     const [expandedFeedback, setExpandedFeedback] = useState({});
+    const [visualMetrics, setVisualMetrics] = useState({ score: null, emotion: "Neutral" });
 
     // Refs
     const videoRef = useRef(null);
@@ -68,13 +69,18 @@ const InterviewSession = () => {
             const base64Frame = canvas.toDataURL('image/jpeg', 0.6);
             console.log(`[Visual Log] Frame Captured for Session: ${sessionId}`, base64Frame.substring(0, 60) + "...");
             
-            // Python ML Backend එකට Frame එක Stream කිරීමට අවශ්‍ය නම්:
-            /*
+            // Python ML Backend එකට Frame එක Stream කිරීම
             axios.post("http://localhost:8000/api/analyze-visual", {
                 sessionId: sessionId,
                 frame: base64Frame
+            }).then(response => {
+                if(response.data.success && response.data.confidenceScore !== undefined) {
+                    setVisualMetrics({
+                        score: response.data.confidenceScore,
+                        emotion: response.data.emotion
+                    });
+                }
             }).catch(err => console.error("Visual API Error:", err));
-            */
         }
     };
 
@@ -410,6 +416,20 @@ const InterviewSession = () => {
                                         <div className="absolute top-3 left-3 bg-red-600 text-[9px] font-black uppercase px-2 py-0.5 rounded-md tracking-widest animate-pulse flex items-center gap-1 z-10">
                                             <span className="w-1.5 h-1.5 bg-white rounded-full"></span> {isMuted ? "REC - MUTED" : "LIVE REC"}
                                         </div>
+                                        {interviewMode === "MULTIMODAL" && (
+                                            <div className="absolute bottom-4 left-4 right-4 bg-slate-900/80 backdrop-blur-sm border border-slate-700/50 rounded-xl p-3 flex justify-between items-center z-10">
+                                                <div className="flex flex-col">
+                                                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Live Emotion</span>
+                                                    <span className="text-sm font-black text-blue-400">{visualMetrics.emotion || "Neutral"}</span>
+                                                </div>
+                                                <div className="flex flex-col text-right">
+                                                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Confidence</span>
+                                                    <span className={`text-sm font-black ${visualMetrics.score >= 70 ? 'text-green-400' : 'text-orange-400'}`}>
+                                                        {visualMetrics.score !== null ? `${visualMetrics.score}%` : 'Evaluating...'}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
                                 ) : (
                                     <div className="text-center p-6">

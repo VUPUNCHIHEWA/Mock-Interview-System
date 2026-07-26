@@ -103,6 +103,26 @@ async def continue_interview_session(data: dict, client=None, db=None):
 
     session_id = data.get("sessionId")
     user_message = data.get("message", "")
+    audio_path = data.get("audio_path")
+
+    if audio_path:
+        try:
+            import speech_recognition as sr
+            from pydub import AudioSegment
+            
+            wav_path = audio_path.replace(".webm", ".wav")
+            audio = AudioSegment.from_file(audio_path, format="webm")
+            audio.export(wav_path, format="wav")
+            
+            recognizer = sr.Recognizer()
+            with sr.AudioFile(wav_path) as source:
+                audio_data = recognizer.record(source)
+                transcribed_text = recognizer.recognize_google(audio_data)
+                
+            user_message = f"{user_message} {transcribed_text}".strip()
+            print(f"🎙️ Transcribed Audio: {transcribed_text}")
+        except Exception as e:
+            print(f"❌ Audio processing error: {e}")
 
     if not session_id or not db:
         raise HTTPException(status_code=400, detail="Active interview session ID and DB session required")
