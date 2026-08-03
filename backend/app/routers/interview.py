@@ -1,5 +1,6 @@
 from typing import Optional
 from fastapi import APIRouter, File, Form, UploadFile, Request, Depends, HTTPException
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from app.core.dependencies import get_db
 from app.models import InterviewSession, InterviewResponse, VisualMetric
@@ -34,34 +35,29 @@ async def chat_interview(
     request: Request,
     sessionId: Optional[str] = Form(None),
     message: Optional[str] = Form(None),
-    audioFile: Optional[UploadFile] = File(None),
+    audio_file: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db)
 ):
-    # 1. Request එක එන්නේ JSON ද නැත්නම් Multipart Form Data ද කියලා චෙක් කිරීම
+    
     content_type = request.headers.get("content-type", "")
 
     if "application/json" in content_type:
-        # Frontend එකෙන් JSON එවුවොත්:
+        
         body = await request.json()
         payload = body
     else:
-        # Frontend එකෙන් Form Data / Audio එවුවොත්:
+       
         payload = {
             "sessionId": sessionId,
             "message": message or ""
         }
 
-    # 2. Audio File එකක් ආවා නම් සේව් කිරීම (Optionally)
-    if audioFile:
-        import os, shutil, time
-        os.makedirs("uploaded_audio", exist_ok=True)
-        audio_path = f"uploaded_audio/vocal_{payload.get('sessionId')}_{int(time.time())}.webm"
-        with open(audio_path, "wb") as buffer:
-            shutil.copyfileobj(audioFile.file, buffer)
-        print(f"🎙️ Audio file saved to {audio_path}")
-        payload["audio_path"] = audio_path
+    
+    if audio_file:
+        audio_content = await audio_file.read()
+        payload["audio_content"] = audio_content
 
-    # 3. Service එකට ඩේටා පාස් කිරීම
+    
     return await continue_interview_session(payload, gemini_client, db)
 
 @router.post("/api/analyze-visual")
@@ -94,8 +90,7 @@ async def analyze_visual(data: dict, db: Session = Depends(get_db)):
                     score = float(results.detections[0].score[0]) * 100
                     emotion = "Attentive" if score > 75 else "Neutral"
                 else:
-                    score = 0.0
-                    emotion = "No Face Detected"
+                    return {"confidence_score": 0, "detected_emotion": "No Face Detected", "status": "No Face"}
                 
         # Save to DB
         new_metric = VisualMetric(
@@ -110,6 +105,28 @@ async def analyze_visual(data: dict, db: Session = Depends(get_db)):
     except Exception as e:
         print(f"Visual Analysis Error: {e}")
         return {"confidence_score": 85, "eye_contact_score": 80, "emotion": "Neutral", "status": "Success", "success": True}
+
+@router.get("/api/audio-file/{response_id}")
+async def get_audio_file(response_id: int, user_id: int, db: Session = Depends(get_db)):
+    response_record = db.query(InterviewResponse).filter(InterviewResponse.id == response_id).first()
+    if not response_record:
+        raise HTTPException(status_code=404, detail="Response not found")
+        
+    session = db.query(InterviewSession).filter(InterviewSession.session_id == response_record.session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+        
+    if session.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Unauthorized access to this audio file")
+        
+    if not response_record.audio_path:
+        raise HTTPException(status_code=404, detail="No audio file associated with this response")
+        
+    import os
+    if not os.path.exists(response_record.audio_path):
+        raise HTTPException(status_code=404, detail="Audio file not found on server")
+        
+    return FileResponse(response_record.audio_path, media_type="audio/webm")
 
 @router.post("/api/end-interview")
 async def end_interview(data: dict, db: Session = Depends(get_db)):

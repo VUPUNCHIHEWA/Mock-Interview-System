@@ -3,9 +3,9 @@ import axios from 'axios';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 
-// ==========================================
-// 1. CV TEMPLATES COMPONENTS
-// ==========================================
+
+
+
 
 // Template 1: Modern Layout (Your Original Styling)
 const ModernTemplate = ({ cvData, selectedProjects }) => (
@@ -223,9 +223,9 @@ const ElegantTemplate = ({ cvData, selectedProjects }) => (
 );
 
 
-// ==========================================
+
 // 2. MAIN CV BUILDER COMPONENT
-// ==========================================
+
 const CVBuilder = () => {
     const cvPreviewRef = useRef(null);
 

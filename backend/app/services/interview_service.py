@@ -8,7 +8,7 @@ from app.models import InterviewSession, InterviewResponse
 
 
 def clean_json_response(text: str) -> dict:
-    """Gemini එකෙන් එන Markdown Backticks (```json ... ```) අයින් කර JSON Object එකක් ලබාදෙයි."""
+    
     if not text:
         return {}
     try:
@@ -103,10 +103,29 @@ async def continue_interview_session(data: dict, client=None, db=None):
 
     session_id = data.get("sessionId")
     user_message = data.get("message", "")
-    audio_path = data.get("audio_path")
+    audio_content = data.get("audio_content")
 
-    if audio_path:
+    if not session_id or not db:
+        raise HTTPException(status_code=400, detail="Active interview session ID and DB session required")
+
+    session = db.query(InterviewSession).filter(InterviewSession.session_id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Active interview session not found")
+
+    user_id = session.user_id
+    audio_path = None
+
+    if audio_content:
         try:
+            import os, time
+            folder_path = f"uploads/user_{user_id}/session_{session_id}"
+            os.makedirs(folder_path, exist_ok=True)
+            audio_path = f"{folder_path}/audio_{int(time.time())}.webm"
+            
+            with open(audio_path, "wb") as buffer:
+                buffer.write(audio_content)
+            print(f"🎙️ Audio file saved to {audio_path}")
+
             import speech_recognition as sr
             from pydub import AudioSegment
             
@@ -124,12 +143,7 @@ async def continue_interview_session(data: dict, client=None, db=None):
         except Exception as e:
             print(f"❌ Audio processing error: {e}")
 
-    if not session_id or not db:
-        raise HTTPException(status_code=400, detail="Active interview session ID and DB session required")
 
-    session = db.query(InterviewSession).filter(InterviewSession.session_id == session_id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Active interview session not found")
 
     # Get the last unanswered question
     last_response = db.query(InterviewResponse).filter(
@@ -141,6 +155,8 @@ async def continue_interview_session(data: dict, client=None, db=None):
     # Save user's answer immediately
     if last_response and not last_response.user_answer:
         last_response.user_answer = user_message
+        if audio_path:
+            last_response.audio_path = audio_path
         db.commit()
 
     dynamic_prompt = f"""

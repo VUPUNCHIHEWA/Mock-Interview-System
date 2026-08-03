@@ -51,27 +51,59 @@ const Dashboard = () => {
                             </button>
                         </div>
 
-                        {/* Cartoon-style CSS Animation Avatar */}
-                        <div className="w-64 h-64 flex items-center justify-center relative">
-                            {/* Outer Glow Circles */}
-                            <div className="absolute w-full h-full bg-blue-500/10 rounded-full animate-ping [animation-duration:3s]"></div>
-                            <div className="absolute w-48 h-48 bg-indigo-500/20 rounded-full animate-pulse"></div>
+                        {/* Cartoon-style CSS Animation Avatar - Friendly AI Interviewer */}
+                        <div className="w-64 h-64 flex items-center justify-center relative group hidden md:flex">
                             
-                            {/* The AI Character (CSS Drawing) */}
-                            <div className="relative w-40 h-40 bg-gradient-to-tr from-blue-700 to-cyan-400 rounded-3xl rotate-12 flex items-center justify-center shadow-2xl border border-white/20 animate-bounce [animation-duration:4s]">
-                                <div className="absolute -inset-1 bg-gradient-to-tr from-blue-400 to-cyan-300 rounded-3xl blur opacity-30"></div>
-                                {/* Character Eyes */}
-                                <div className="flex gap-4 -rotate-12">
-                                    <div className="w-4 h-6 bg-white rounded-full animate-pulse"></div>
-                                    <div className="w-4 h-6 bg-white rounded-full animate-pulse"></div>
+                            {/* Floating Animation Wrapper */}
+                            <div className="relative flex flex-col items-center justify-center animate-[bounce_3s_ease-in-out_infinite]">
+                                
+                                {/* Antenna */}
+                                <div className="relative flex flex-col items-center z-0 -mb-2">
+                                    <div className="w-3 h-3 bg-cyan-400 rounded-full animate-ping absolute"></div>
+                                    <div className="w-3 h-3 bg-cyan-400 rounded-full shadow-[0_0_10px_#22d3ee] z-10"></div>
+                                    <div className="w-1.5 h-6 bg-slate-600"></div>
                                 </div>
-                                {/* Character Mouth */}
-                                <div className="absolute bottom-8 w-10 h-1.5 bg-white/40 rounded-full -rotate-12"></div>
+
+                                {/* Head */}
+                                <div className="relative w-36 h-28 bg-gradient-to-b from-slate-200 to-slate-300 rounded-[2rem] shadow-2xl border-b-4 border-slate-400 flex flex-col items-center justify-center z-10 overflow-hidden">
+                                    
+                                    {/* Screen / Visor */}
+                                    <div className="w-28 h-14 bg-slate-900 rounded-2xl border-[3px] border-slate-800 flex items-center justify-center gap-4 shadow-inner relative overflow-hidden">
+                                        {/* Glare effect */}
+                                        <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-br from-white/20 to-transparent opacity-50"></div>
+                                        
+                                        {/* Eyes */}
+                                        <div className="w-4 h-5 bg-cyan-400 rounded-full animate-[pulse_2s_ease-in-out_infinite] shadow-[0_0_12px_#22d3ee]"></div>
+                                        <div className="w-4 h-5 bg-cyan-400 rounded-full animate-[pulse_2s_ease-in-out_infinite] shadow-[0_0_12px_#22d3ee]"></div>
+                                    </div>
+
+                                    {/* Mouth / Speaker (Soundwaves style) */}
+                                    <div className="flex gap-1 mt-3 items-end h-3">
+                                        <div className="w-1.5 h-2 bg-slate-400 rounded-full animate-[pulse_1s_ease-in-out_infinite]"></div>
+                                        <div className="w-1.5 h-3 bg-slate-400 rounded-full animate-[pulse_1.2s_ease-in-out_infinite_0.1s]"></div>
+                                        <div className="w-1.5 h-2 bg-slate-400 rounded-full animate-[pulse_1.1s_ease-in-out_infinite_0.2s]"></div>
+                                    </div>
+                                    
+                                </div>
+
+                                {/* Neck */}
+                                <div className="w-8 h-4 bg-slate-500 rounded-b-md z-0 shadow-inner"></div>
+
+                                {/* Shoulders / Body base */}
+                                <div className="w-44 h-12 bg-gradient-to-b from-blue-500 to-blue-700 rounded-t-[2.5rem] mt-[-2px] z-10 border-t-4 border-blue-400 shadow-xl flex justify-center pt-2">
+                                    {/* Collar/Tie accent */}
+                                    <div className="w-4 h-4 rotate-45 bg-cyan-300 rounded-sm shadow-[0_0_10px_#67e8f9]"></div>
+                                </div>
+                                
                             </div>
+
+                            {/* Background Tech Rings */}
+                            <div className="absolute w-56 h-56 border border-blue-500/20 rounded-full animate-[spin_10s_linear_infinite] border-dashed"></div>
+                            <div className="absolute w-44 h-44 border-2 border-cyan-500/10 rounded-full animate-[spin_8s_linear_infinite_reverse]"></div>
                             
                             {/* Floating Particles */}
-                            <div className="absolute top-0 right-10 w-3 h-3 bg-blue-400 rounded-full animate-bounce [animation-delay:1s]"></div>
-                            <div className="absolute bottom-10 left-5 w-2 h-2 bg-indigo-400 rounded-full animate-ping"></div>
+                            <div className="absolute top-4 right-12 w-2 h-2 bg-cyan-400 rounded-full animate-bounce shadow-[0_0_8px_#22d3ee]"></div>
+                            <div className="absolute bottom-16 left-6 w-3 h-3 bg-blue-500 rounded-full animate-pulse shadow-[0_0_8px_#3b82f6]"></div>
                         </div>
                     </div>
                 </div>

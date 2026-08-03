@@ -19,6 +19,7 @@ const InterviewSession = () => {
 
     // States
     const [userAnswer, setUserAnswer] = useState("");
+    const [isRecording, setIsRecording] = useState(false);
     const [isMuted, setIsMuted] = useState(false);
     const [isCameraOn, setIsCameraOn] = useState(true);
     const [cameraError, setCameraError] = useState(false);
@@ -37,6 +38,8 @@ const InterviewSession = () => {
     // 🎙️ Audio Recording Refs
     const mediaRecorderRef = useRef(null);
     const audioChunksRef = useRef([]);
+    const recognitionRef = useRef(null);
+    const finalTranscriptRef = useRef("");
 
     const [chatHistory, setChatHistory] = useState([
         {
@@ -69,7 +72,7 @@ const InterviewSession = () => {
             const base64Frame = canvas.toDataURL('image/jpeg', 0.6);
             console.log(`[Visual Log] Frame Captured for Session: ${sessionId}`, base64Frame.substring(0, 60) + "...");
             
-            // Python ML Backend එකට Frame එක Stream කිරීම
+            
             axios.post("http://localhost:8000/api/analyze-visual", {
                 sessionId: sessionId,
                 frame: base64Frame
@@ -101,15 +104,14 @@ const InterviewSession = () => {
         try {
             audioChunksRef.current = []; 
 
-            // 🛠️ CRITICAL FIX: වීඩියෝ ස්ට්‍රීම් එකෙන් ඕඩියෝ ට්‍රැක් එක විතරක් වෙන් කරලා පිරිසිදු ඕඩියෝ ස්ට්‍රීම් එකක් හදනවා
-            const audioTracks = stream.getAudioTracks();
+            
             if (audioTracks.length === 0) {
                 console.error("[Vocal Log] No audio tracks found in stream.");
                 return;
             }
             const audioOnlyStream = new MediaStream(audioTracks);
 
-            // බ්‍රවුසර් එක සපෝර්ට් කරන හොඳම mimeType එක තෝරාගැනීම
+            
             let options = { mimeType: 'audio/webm;codecs=opus' };
             
             if (!MediaRecorder.isTypeSupported(options.mimeType)) options = { mimeType: 'audio/webm' };
@@ -119,7 +121,7 @@ const InterviewSession = () => {
 
             console.log(`[Vocal Log] Selected MimeType: ${options.mimeType || 'Default'}`);
 
-            // රෙකෝඩර් එකට දෙන්නේ අර වෙන් කරගත්තු audioOnlyStream එකයි
+            
             const mediaRecorder = new MediaRecorder(audioOnlyStream, options);
             mediaRecorderRef.current = mediaRecorder;
 
@@ -129,7 +131,7 @@ const InterviewSession = () => {
                 }
             };
 
-            // ස්ට්‍රීම් එක ස්ටේබල් වෙනකල් තත්පර බාගයක් (500ms) ඉඳලා ස්ටාර්ට් කරනවා
+            
             setTimeout(() => {
                 if (mediaRecorderRef.current && mediaRecorderRef.current.state === "inactive") {
                     mediaRecorderRef.current.start(1000); // Record chunks every 1 second
@@ -163,8 +165,7 @@ const InterviewSession = () => {
                 audioTrack.enabled = !isMuted;
             }
 
-            // ඕඩියෝ කැප්චර් ලොජික් එක ස්ටාර්ට් කිරීම
-            startAudioRecording(stream);
+            // Audio recording is now triggered explicitly by the user
 
         } catch (err) {
             console.error("Error accessing hardware:", err);
@@ -207,9 +208,93 @@ const InterviewSession = () => {
     };
 
 
-    // 🚀 Handles Submitting text answer + stopping audio and building FormData
+    const handleStartRecording = () => {
+        if (!streamRef.current) {
+            alert("Microphone not available.");
+            return;
+        }
+        startAudioRecording(streamRef.current);
+        setIsRecording(true);
+
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (SpeechRecognition) {
+            const recognition = new SpeechRecognition();
+            recognition.continuous = true;
+            recognition.interimResults = true;
+            recognition.lang = 'en-US';
+
+            // Store what's already typed before recording
+            finalTranscriptRef.current = userAnswer.trim() ? userAnswer.trim() + " " : "";
+
+            recognition.onresult = (event) => {
+                let interimTranscript = '';
+                for (let i = event.resultIndex; i < event.results.length; ++i) {
+                    if (event.results[i].isFinal) {
+                        finalTranscriptRef.current += event.results[i][0].transcript + " ";
+                    } else {
+                        interimTranscript += event.results[i][0].transcript;
+                    }
+                }
+                setUserAnswer(finalTranscriptRef.current + interimTranscript);
+            };
+
+            recognition.onerror = (e) => console.error("Speech Recognition Error:", e);
+            try {
+                recognition.start();
+                recognitionRef.current = recognition;
+            } catch (err) {
+                console.error("Speech recognition failed to start:", err);
+            }
+        }
+    };
+
+    const handleStopAndSend = () => {
+        if (recognitionRef.current) {
+            recognitionRef.current.stop();
+            recognitionRef.current = null;
+        }
+
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+            mediaRecorderRef.current.onstop = async () => {
+                const audioBlob = new Blob(audioChunksRef.current, { type: mediaRecorderRef.current.mimeType || 'audio/webm' });
+                await submitAudioAnswer(audioBlob);
+            };
+            mediaRecorderRef.current.stop();
+            setIsRecording(false);
+        }
+    };
+
+    const submitAudioAnswer = async (audioBlob) => {
+        setIsWaitingForAi(true);
+        const currentAnswer = userAnswer.trim() || "🎙️ [Audio Response]";
+        const newUserMessage = { sender: "user", text: currentAnswer };
+        setChatHistory(prev => [...prev, newUserMessage]);
+        setUserAnswer(""); 
+
+        const formData = new FormData();
+        formData.append("sessionId", sessionId);
+        formData.append("message", currentAnswer);
+        formData.append("audio_file", audioBlob, `vocal_${sessionId}.webm`);
+
+        try {
+            const response = await axios.post("http://localhost:8000/api/chat-interview", formData, {
+                headers: { 'Content-Type': 'multipart/form-data' }
+            });
+            if (response.data.success) {
+                setChatHistory(prev => [...prev, { sender: "ai", text: response.data.nextQuestion, evaluation: response.data.evaluation }]);
+            } else {
+                setChatHistory(prev => [...prev, { sender: "ai", text: "Sorry, I couldn't process that response." }]);
+            }
+        } catch (error) {
+            console.error("Failed to communicate with backend:", error);
+            setChatHistory(prev => [...prev, { sender: "ai", text: "Connection error." }]);
+        } finally {
+            setIsWaitingForAi(false);
+        }
+    };
+
     const handleAnswerSubmit = async (e) => {
-        e.preventDefault();
+        if (e) e.preventDefault();
         if (!userAnswer.trim() || isWaitingForAi) return;
 
         const currentAnswer = userAnswer;
@@ -219,68 +304,23 @@ const InterviewSession = () => {
         setChatHistory(prev => [...prev, newUserMessage]);
         setIsWaitingForAi(true);
 
-        if (interviewMode === "TEXT") {
-            try {
-                const response = await axios.post("http://localhost:8000/api/chat-interview", {
-                    sessionId: sessionId,
-                    message: currentAnswer
-                }, {
-                    headers: { 'Content-Type': 'application/json' }
-                });
+        try {
+            const response = await axios.post("http://localhost:8000/api/chat-interview", {
+                sessionId: sessionId,
+                message: currentAnswer
+            }, {
+                headers: { 'Content-Type': 'application/json' }
+            });
 
-                if (response.data.success) {
-                    setChatHistory(prev => [...prev, { sender: "ai", text: response.data.nextQuestion, evaluation: response.data.evaluation }]);
-                } else {
-                    setChatHistory(prev => [...prev, { sender: "ai", text: "Sorry, I couldn't process that response." }]);
-                }
-            } catch (error) {
-                console.error("Failed to communicate with backend:", error);
-                setChatHistory(prev => [...prev, { sender: "ai", text: "Connection error. Please check your backend server." }]);
-            } finally {
-                setIsWaitingForAi(false);
+            if (response.data.success) {
+                setChatHistory(prev => [...prev, { sender: "ai", text: response.data.nextQuestion, evaluation: response.data.evaluation }]);
+            } else {
+                setChatHistory(prev => [...prev, { sender: "ai", text: "Sorry, I couldn't process that response." }]);
             }
-            return;
-        }
-
-        // 🎙️ 1. බැක්ග්‍රවුන්ඩ් ඕඩියෝ රෙකෝඩින් එක නවත්වනවා
-        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-            mediaRecorderRef.current.onstop = async () => {
-                
-                // 2. ඕඩියෝ බ්ලොබ් එක සාදා ගැනීම
-                const audioBlob = new Blob(audioChunksRef.current, { type: mediaRecorderRef.current.mimeType || 'audio/webm' });
-                console.log(`[Vocal Log] Audio Blob Created. Size: ${audioBlob.size} bytes`);
-
-                // 3. FormData එකක් සාදා සියල්ල ඇතුළත් කිරීම
-                const formData = new FormData();
-                formData.append("sessionId", sessionId);
-                formData.append("message", currentAnswer);
-                formData.append("audioFile", audioBlob, `vocal_${sessionId}.webm`);
-
-                try {
-                    // 4. Backend Chat Endpoint එකට FormData එක යැවීම
-                    const response = await axios.post("http://localhost:8000/api/chat-interview", formData, {
-                        headers: { 'Content-Type': 'multipart/form-data' }
-                    });
-
-                    if (response.data.success) {
-                        setChatHistory(prev => [...prev, { sender: "ai", text: response.data.nextQuestion, evaluation: response.data.evaluation }]);
-                    } else {
-                        setChatHistory(prev => [...prev, { sender: "ai", text: "Sorry, I couldn't process that response." }]);
-                    }
-                } catch (error) {
-                    console.error("Failed to communicate with backend:", error);
-                    setChatHistory(prev => [...prev, { sender: "ai", text: "Connection error. Please check your backend server." }]);
-                } finally {
-                    setIsWaitingForAi(false);
-                    // 5. ඊළඟ ප්‍රශ්නයට පිළිතුරු දීමට නැවත බැක්ග්‍රවුන්ඩ් රෙකෝඩින් එක ස්ටාර්ට් කිරීම
-                    if (streamRef.current) {
-                        startAudioRecording(streamRef.current);
-                    }
-                }
-            };
-
-            mediaRecorderRef.current.stop(); 
-        } else {
+        } catch (error) {
+            console.error("Failed to communicate with backend:", error);
+            setChatHistory(prev => [...prev, { sender: "ai", text: "Connection error. Please check your backend server." }]);
+        } finally {
             setIsWaitingForAi(false);
         }
     };
@@ -384,19 +424,63 @@ const InterviewSession = () => {
                         <div ref={chatEndRef} />
                     </div>
 
-                    <form onSubmit={handleAnswerSubmit} className="relative mt-auto">
-                        <textarea 
-                            value={userAnswer}
-                            onChange={(e) => setUserAnswer(e.target.value)}
-                            disabled={isWaitingForAi}
-                            placeholder={isWaitingForAi ? "Please wait until Gemini responds..." : "Type your detailed answer here..."}
-                            rows="2"
-                            className="w-full bg-slate-950 border border-slate-800 rounded-2xl py-4 pl-5 pr-16 text-sm text-slate-200 placeholder-slate-500 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none transition-all disabled:opacity-50"
-                        />
-                        <button type="submit" disabled={isWaitingForAi || !userAnswer.trim()} className="absolute right-3 bottom-4 bg-blue-600 text-white p-3 rounded-xl hover:bg-blue-500 active:scale-95 transition-all disabled:bg-slate-800">
-                            <Send size={16} />
-                        </button>
-                    </form>
+                    <div className="mt-auto flex flex-col gap-2">
+                        {interviewMode === "MULTIMODAL" && (
+                            <div className="flex items-center justify-between bg-slate-800/50 border border-slate-700 p-3 rounded-2xl">
+                                <div className="flex items-center gap-3">
+                                    <Mic size={20} className={isRecording ? "text-red-500 animate-pulse" : "text-slate-400"} />
+                                    <span className="text-sm font-bold text-slate-300">
+                                        {isRecording ? "Recording in progress..." : "Voice Answer"}
+                                    </span>
+                                </div>
+                                <div className="flex gap-2">
+                                    {userAnswer.length > 0 && (
+                                        <button 
+                                            type="button"
+                                            onClick={() => { setUserAnswer(""); finalTranscriptRef.current = ""; }}
+                                            disabled={isWaitingForAi}
+                                            className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
+                                        >
+                                            Clear Text
+                                        </button>
+                                    )}
+                                    {!isRecording ? (
+                                        <button 
+                                            onClick={handleStartRecording} 
+                                            disabled={isWaitingForAi}
+                                            className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest flex items-center gap-2 transition-all active:scale-95 disabled:opacity-50"
+                                        >
+                                            Start Recording
+                                        </button>
+                                    ) : (
+                                        <button 
+                                            onClick={handleStopAndSend} 
+                                            disabled={isWaitingForAi || userAnswer.trim().split(/\s+/).filter(w => w.length > 0).length < 4}
+                                            className="bg-red-600 hover:bg-red-500 text-white px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest flex items-center gap-2 transition-all active:scale-95 disabled:opacity-50"
+                                        >
+                                            <StopCircle size={14}/> Stop & Send Answer
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                        <form onSubmit={handleAnswerSubmit} className="relative">
+                            <textarea 
+                                value={userAnswer}
+                                onChange={(e) => setUserAnswer(e.target.value)}
+                                disabled={isWaitingForAi}
+                                placeholder={isWaitingForAi ? "Please wait until Gemini responds..." : "Type your detailed answer here... (Live transcribed text will appear here)"}
+                                rows="2"
+                                className="w-full bg-slate-950 border border-slate-800 rounded-2xl py-4 pl-5 pr-16 text-sm text-slate-200 placeholder-slate-500 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 resize-none transition-all disabled:opacity-50"
+                            />
+                            <button type="submit" disabled={isWaitingForAi || isRecording || userAnswer.trim().split(/\s+/).filter(w => w.length > 0).length < 4} className="absolute right-3 bottom-4 bg-blue-600 text-white p-3 rounded-xl hover:bg-blue-500 active:scale-95 transition-all disabled:bg-slate-800">
+                                <Send size={16} />
+                            </button>
+                        </form>
+                        {userAnswer.trim().length > 0 && userAnswer.trim().split(/\s+/).filter(w => w.length > 0).length < 4 && (
+                            <p className="text-[10px] text-orange-400 font-bold px-2 mt-1">Please speak a detailed technical answer to enable submission.</p>
+                        )}
+                    </div>
                 </div>
 
                 {/* RIGHT SIDE: Live Camera Preview */}

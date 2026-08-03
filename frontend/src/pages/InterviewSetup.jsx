@@ -15,12 +15,12 @@ const InterviewSetup = () => {
     const [difficulty, setDifficulty] = useState('Medium');
     const [githubUser, setGithubUser] = useState("");
     const [isSyncing, setIsSyncing] = useState(false);
-    const [isLaunching, setIsLaunching] = useState(false); // Launch වෙද්දී ලෝඩර් එකක් පෙන්වීමට
+    const [isLaunching, setIsLaunching] = useState(false); 
     const [hasCV, setHasCV] = useState(false);
 
-    // CV එකෙන් Extract කරපු Text එක තියාගන්න State එක
+    // State Where the text extract from cv
     const [cvText, setCvText] = useState("");
-    const [syncedRepos, setSyncedRepos] = useState([]); // GitHub repos store කරගන්න
+    const [syncedRepos, setSyncedRepos] = useState([]); // Store GitHub repos 
     const [interviewMode, setInterviewMode] = useState('MULTIMODAL');
 
     // GitHub Sync Logic (Connected to Backend)
@@ -31,7 +31,7 @@ const InterviewSetup = () => {
         try {
             const response = await axios.get(`http://localhost:8000/api/github-sync/${githubUser}`);
             if (response.data.success) {
-                setSyncedRepos(response.data.repositories); // Repositories ටික state එකට දානවා
+                setSyncedRepos(response.data.repositories); // Put the Repositories to state 
                 alert(response.data.message);
             }
         } catch (error) {
@@ -42,17 +42,17 @@ const InterviewSetup = () => {
         }
     };
 
-    // CV Upload එක සාර්ථක වුණාම Backend එකෙන් එන extracted_text එක බාරගන්නවා
+   
     const handleCVUploadSuccess = (extractedText) => {
         setHasCV(true);
-        setCvText(extractedText); // PDF එකෙන් ගත්ත අකුරු ටික මෙතන save වෙනවා
+        setCvText(extractedText); 
     };
 
-    // Final Action: Data ටික Backend එකට යවලා Save කරලා ඊළඟ පිටුවට යාම
+    
     const handleStartInterview = async () => {
         setIsLaunching(true);
 
-        // Backend එකට ගැලපෙන්න Role එක full name එකක් විදිහට සකස් කිරීම
+        
         const fullRoleName = selectedRole === 'QA' ? 'Software QA Engineer' : 'Full-Stack Software Engineer';
         const userId = localStorage.getItem("userId") || 1;
 
@@ -60,7 +60,7 @@ const InterviewSetup = () => {
             role: fullRoleName,
             difficulty: difficulty,
             githubUsername: githubUser || "N/A",
-            cvPath: cvText, // මුළු PDF එකේම Text එක මෙතනින් යනවා
+            cvPath: cvText, 
             interviewMode: interviewMode,
             userId: parseInt(userId, 10)
         };
@@ -68,11 +68,11 @@ const InterviewSetup = () => {
         try {
             const response = await axios.post("http://localhost:8000/api/start-interview", payload);
             if (response.data.success) {
-                // 🔥 වැදගත්: Backend එකෙන් ලැබුණු 'firstQuestion' එකත් අපි Session එකට පාස් කරනවා
+                
                 navigate('/interview-session', {
                     state: {
                         sessionId: response.data.sessionId,
-                        firstQuestion: response.data.firstQuestion, // Gemini ගේ පළමු ප්‍රශ්නය
+                        firstQuestion: response.data.firstQuestion, 
                         role: fullRoleName,
                         difficulty: difficulty,
                         github: githubUser,
@@ -300,24 +300,31 @@ const InterviewSetup = () => {
                                 </div>
                             </div>
 
-                            <button
-                                onClick={handleStartInterview}
-                                disabled={isLaunching}
-                                className="group w-full bg-white text-blue-600 py-6 rounded-[2rem] font-black text-lg uppercase tracking-tighter hover:bg-slate-900 hover:text-white transition-all shadow-2xl flex items-center justify-center gap-3 active:scale-95 disabled:bg-slate-200 disabled:text-slate-400"
-                            >
-                                {isLaunching ? (
-                                    <>Initializing... <Loader2 className="animate-spin" size={20} /></>
-                                ) : (
-                                    <>Launch AI Interview <ChevronRight size={20} className="group-hover:translate-x-1 transition-transform" /></>
-                                )}
-                            </button>
-
                             <p className="text-[9px] text-center mt-6 font-bold uppercase tracking-widest opacity-40 leading-relaxed">
-                                AI will analyze your Multimodal patterns <br /> and professional background.
+                                Live Preview of your selected configuration.
                             </p>
                         </div>
                     </div>
 
+                </div>
+
+                {/* BOTTOM: Launch Button */}
+                <div className="mt-12 flex flex-col items-center">
+                    <button
+                        onClick={handleStartInterview}
+                        disabled={isLaunching}
+                        className="group w-full max-w-md bg-blue-600 text-white py-6 rounded-[2rem] font-black text-lg uppercase tracking-tighter hover:bg-slate-900 transition-all shadow-2xl flex items-center justify-center gap-3 active:scale-95 disabled:bg-slate-300 disabled:text-slate-500"
+                    >
+                        {isLaunching ? (
+                            <>Initializing... <Loader2 className="animate-spin" size={20} /></>
+                        ) : (
+                            <>Launch AI Interview <ChevronRight size={20} className="group-hover:translate-x-1 transition-transform" /></>
+                        )}
+                    </button>
+
+                    <p className="text-[9px] text-center mt-6 font-bold text-slate-400 uppercase tracking-widest leading-relaxed">
+                        AI will analyze your Multimodal patterns <br /> and professional background.
+                    </p>
                 </div>
             </div>
         </div>
