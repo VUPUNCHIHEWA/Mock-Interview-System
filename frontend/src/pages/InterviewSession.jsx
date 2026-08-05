@@ -26,7 +26,16 @@ const InterviewSession = () => {
     const [isWaitingForAi, setIsWaitingForAi] = useState(false);
     const [isEnding, setIsEnding] = useState(false);
     const [expandedFeedback, setExpandedFeedback] = useState({});
-    const [visualMetrics, setVisualMetrics] = useState({ score: null, emotion: "Neutral" });
+    const [visualMetrics, setVisualMetrics] = useState({ 
+        score: null, 
+        gaze: null,
+        head: null,
+        emotion: "Neutral", // Used mapped from eye_contact_status for compatibility, but let's keep all
+        eyeContactStatus: "UNKNOWN",
+        headPoseStatus: "UNKNOWN",
+        warning: null
+    });
+    const [scoreAccumulator, setScoreAccumulator] = useState({ total: 0, count: 0 });
 
     // Refs
     const videoRef = useRef(null);
@@ -58,7 +67,7 @@ const InterviewSession = () => {
         chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [chatHistory]);
 
-    // 📸 Visual Frame Capture Logic (1-second intervals)
+    // 📸 Visual Frame Capture Logic (2.5-second intervals)
     const captureVisualFrame = () => {
         if (videoRef.current && canvasRef.current && isCameraOn) {
             const video = videoRef.current;
@@ -72,16 +81,27 @@ const InterviewSession = () => {
             const base64Frame = canvas.toDataURL('image/jpeg', 0.6);
             console.log(`[Visual Log] Frame Captured for Session: ${sessionId}`, base64Frame.substring(0, 60) + "...");
             
-            
             axios.post("http://localhost:8000/api/analyze-visual", {
                 sessionId: sessionId,
-                frame: base64Frame
+                image_base64: base64Frame
             }).then(response => {
-                if(response.data.success && response.data.confidenceScore !== undefined) {
+                const data = response.data;
+                if(data.status && data.status !== "ERROR" && data.status !== "SKIPPED") {
                     setVisualMetrics({
-                        score: response.data.confidenceScore,
-                        emotion: response.data.emotion
+                        score: data.visual_confidence_score,
+                        gaze: data.gaze_score,
+                        head: data.head_stability_score,
+                        eyeContactStatus: data.eye_contact_status,
+                        headPoseStatus: data.head_pose_status,
+                        warning: data.warning_message
                     });
+                    
+                    if (data.status === "FACE_DETECTED") {
+                        setScoreAccumulator(prev => ({
+                            total: prev.total + data.visual_confidence_score,
+                            count: prev.count + 1
+                        }));
+                    }
                 }
             }).catch(err => console.error("Visual API Error:", err));
         }
@@ -89,7 +109,7 @@ const InterviewSession = () => {
 
     useEffect(() => {
         if (isCameraOn && interviewMode === "MULTIMODAL") {
-            captureIntervalRef.current = setInterval(captureVisualFrame, 1000);
+            captureIntervalRef.current = setInterval(captureVisualFrame, 2500);
         } else {
             if (captureIntervalRef.current) clearInterval(captureIntervalRef.current);
         }
@@ -104,7 +124,7 @@ const InterviewSession = () => {
         try {
             audioChunksRef.current = []; 
 
-            
+            const audioTracks = stream.getAudioTracks();
             if (audioTracks.length === 0) {
                 console.error("[Vocal Log] No audio tracks found in stream.");
                 return;
@@ -264,6 +284,13 @@ const InterviewSession = () => {
         }
     };
 
+    const getAvgScore = () => {
+        if (scoreAccumulator.count === 0) return null;
+        const avg = scoreAccumulator.total / scoreAccumulator.count;
+        setScoreAccumulator({ total: 0, count: 0 }); // reset for next question
+        return Math.round(avg * 10) / 10;
+    };
+
     const submitAudioAnswer = async (audioBlob) => {
         setIsWaitingForAi(true);
         const currentAnswer = userAnswer.trim() || "🎙️ [Audio Response]";
@@ -275,6 +302,11 @@ const InterviewSession = () => {
         formData.append("sessionId", sessionId);
         formData.append("message", currentAnswer);
         formData.append("audio_file", audioBlob, `vocal_${sessionId}.webm`);
+        
+        const avgScore = getAvgScore();
+        if (avgScore !== null) {
+            formData.append("visualConfidenceScore", avgScore);
+        }
 
         try {
             const response = await axios.post("http://localhost:8000/api/chat-interview", formData, {
@@ -304,11 +336,17 @@ const InterviewSession = () => {
         setChatHistory(prev => [...prev, newUserMessage]);
         setIsWaitingForAi(true);
 
+        const payload = {
+            sessionId: sessionId,
+            message: currentAnswer
+        };
+        const avgScore = getAvgScore();
+        if (avgScore !== null) {
+            payload.visualConfidenceScore = avgScore;
+        }
+
         try {
-            const response = await axios.post("http://localhost:8000/api/chat-interview", {
-                sessionId: sessionId,
-                message: currentAnswer
-            }, {
+            const response = await axios.post("http://localhost:8000/api/chat-interview", payload, {
                 headers: { 'Content-Type': 'application/json' }
             });
 
@@ -501,16 +539,42 @@ const InterviewSession = () => {
                                             <span className="w-1.5 h-1.5 bg-white rounded-full"></span> {isMuted ? "REC - MUTED" : "LIVE REC"}
                                         </div>
                                         {interviewMode === "MULTIMODAL" && (
-                                            <div className="absolute bottom-4 left-4 right-4 bg-slate-900/80 backdrop-blur-sm border border-slate-700/50 rounded-xl p-3 flex justify-between items-center z-10">
-                                                <div className="flex flex-col">
-                                                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Live Emotion</span>
-                                                    <span className="text-sm font-black text-blue-400">{visualMetrics.emotion || "Neutral"}</span>
-                                                </div>
-                                                <div className="flex flex-col text-right">
-                                                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Confidence</span>
-                                                    <span className={`text-sm font-black ${visualMetrics.score >= 70 ? 'text-green-400' : 'text-orange-400'}`}>
-                                                        {visualMetrics.score !== null ? `${visualMetrics.score}%` : 'Evaluating...'}
-                                                    </span>
+                                            <div className="absolute bottom-4 left-4 right-4 flex flex-col gap-2 z-10">
+                                                {/* Occlusion Warning Banner */}
+                                                {visualMetrics.warning && (
+                                                    <div className="bg-red-500/90 text-white text-[10px] font-black uppercase tracking-widest p-2 rounded-lg text-center animate-pulse border border-red-400 shadow-lg">
+                                                        ⚠️ {visualMetrics.warning}
+                                                    </div>
+                                                )}
+                                                
+                                                <div className="bg-slate-900/85 backdrop-blur-md border border-slate-700/50 rounded-xl p-3 flex flex-col gap-3 shadow-xl">
+                                                    <div className="flex justify-between items-center border-b border-slate-700/50 pb-2">
+                                                        <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Visual Confidence</span>
+                                                        <span className={`text-xs font-black ${visualMetrics.score >= 75 ? 'text-green-400' : visualMetrics.score >= 50 ? 'text-yellow-400' : 'text-red-400'}`}>
+                                                            {visualMetrics.score !== null ? `${visualMetrics.score}%` : 'Evaluating...'}
+                                                        </span>
+                                                    </div>
+                                                    
+                                                    {visualMetrics.score !== null && (
+                                                        <>
+                                                            <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                                                                <div 
+                                                                    className={`h-full transition-all duration-500 ${visualMetrics.score >= 75 ? 'bg-green-400' : visualMetrics.score >= 50 ? 'bg-yellow-400' : 'bg-red-400'}`} 
+                                                                    style={{ width: `${visualMetrics.score}%` }}
+                                                                ></div>
+                                                            </div>
+                                                            <div className="flex justify-between mt-1 gap-2">
+                                                                <div className={`flex-1 p-2 rounded-lg text-center border ${visualMetrics.eyeContactStatus === 'GOOD' ? 'bg-green-500/20 border-green-500/30 text-green-300' : visualMetrics.eyeContactStatus === 'WANDERING' ? 'bg-orange-500/20 border-orange-500/30 text-orange-300' : 'bg-slate-800 border-slate-700 text-slate-500'}`}>
+                                                                    <span className="text-[9px] font-bold uppercase block tracking-wider">👁️ Eye Contact</span>
+                                                                    <span className="text-[10px] font-black">{visualMetrics.eyeContactStatus === 'GOOD' ? 'Good' : visualMetrics.eyeContactStatus === 'WANDERING' ? 'Wandering' : '--'}</span>
+                                                                </div>
+                                                                <div className={`flex-1 p-2 rounded-lg text-center border ${visualMetrics.headPoseStatus === 'STABLE' ? 'bg-green-500/20 border-green-500/30 text-green-300' : visualMetrics.headPoseStatus === 'EXCESSIVE_MOVEMENT' ? 'bg-orange-500/20 border-orange-500/30 text-orange-300' : 'bg-slate-800 border-slate-700 text-slate-500'}`}>
+                                                                    <span className="text-[9px] font-bold uppercase block tracking-wider">🗣️ Head Pose</span>
+                                                                    <span className="text-[10px] font-black">{visualMetrics.headPoseStatus === 'STABLE' ? 'Stable' : visualMetrics.headPoseStatus === 'EXCESSIVE_MOVEMENT' ? 'Unstable' : '--'}</span>
+                                                                </div>
+                                                            </div>
+                                                        </>
+                                                    )}
                                                 </div>
                                             </div>
                                         )}

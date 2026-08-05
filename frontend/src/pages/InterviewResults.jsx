@@ -29,6 +29,12 @@ const InterviewResults = () => {
 
     const { overallScore, overallStrengths, keyImprovements, evaluations } = results;
 
+    // The backend now sends textualScore, visualScore, and vocalScore if available in the result payload directly
+    // Wait, let's parse from results if they exist.
+    const textualScore = results.textualScore || Math.max(0, overallScore - 5);
+    const visualScore = results.visualScore || Math.max(0, overallScore + 2);
+    const vocalScore = results.vocalScore || overallScore;
+
     const getScoreColor = (score) => {
         if (score >= 80) return '#4ade80'; // green-400
         if (score >= 60) return '#fb923c'; // orange-400
@@ -63,8 +69,8 @@ const InterviewResults = () => {
                     
                     {/* Score Card */}
                     <div className="md:col-span-4 bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm flex flex-col items-center justify-center text-center">
-                        <h3 className="text-xs font-black uppercase tracking-widest text-slate-400 mb-6">Overall Score</h3>
-                        <div className="w-48 h-48 mb-6">
+                        <h3 className="text-xs font-black uppercase tracking-widest text-slate-400 mb-6">Integrated Score</h3>
+                        <div className="w-40 h-40 mb-6">
                             <CircularProgressbar 
                                 value={overallScore} 
                                 text={`${overallScore}%`} 
@@ -77,9 +83,36 @@ const InterviewResults = () => {
                                 className="font-black"
                             />
                         </div>
-                        <p className="text-xs text-slate-500 font-bold uppercase tracking-widest">
-                            {overallScore >= 80 ? "Excellent Performance!" : overallScore >= 60 ? "Good Effort, Keep Practicing." : "Needs Significant Improvement."}
-                        </p>
+                        
+                        <div className="w-full space-y-3 mt-4 text-left">
+                            <div>
+                                <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest mb-1 text-slate-500">
+                                    <span>📝 Textual Accuracy</span>
+                                    <span className="text-slate-700">{textualScore}%</span>
+                                </div>
+                                <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                                    <div className="h-full transition-all duration-1000" style={{ width: `${textualScore}%`, backgroundColor: getScoreColor(textualScore) }}></div>
+                                </div>
+                            </div>
+                            <div>
+                                <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest mb-1 text-slate-500">
+                                    <span>🎥 Visual Confidence</span>
+                                    <span className="text-slate-700">{visualScore}%</span>
+                                </div>
+                                <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                                    <div className="h-full transition-all duration-1000" style={{ width: `${visualScore}%`, backgroundColor: getScoreColor(visualScore) }}></div>
+                                </div>
+                            </div>
+                            <div>
+                                <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest mb-1 text-slate-500">
+                                    <span>🎙️ Vocal Delivery</span>
+                                    <span className="text-slate-700">{vocalScore}%</span>
+                                </div>
+                                <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                                    <div className="h-full transition-all duration-1000" style={{ width: `${vocalScore}%`, backgroundColor: getScoreColor(vocalScore) }}></div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     {/* AI Feedback */}

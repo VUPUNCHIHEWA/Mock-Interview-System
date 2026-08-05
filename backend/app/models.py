@@ -94,6 +94,7 @@ class InterviewResponse(Base):
     audio_path = Column(String(500), nullable=True)
     score = Column(Float, nullable=True)
     feedback = Column(Text, nullable=True)
+    visual_confidence_score = Column(Float, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     session = relationship("InterviewSession", back_populates="responses")

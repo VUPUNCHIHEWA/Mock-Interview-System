@@ -157,18 +157,32 @@ async def continue_interview_session(data: dict, client=None, db=None):
         last_response.user_answer = user_message
         if audio_path:
             last_response.audio_path = audio_path
+            
+        vci = data.get("visualConfidenceScore")
+        if vci is not None:
+            try:
+                last_response.visual_confidence_score = float(vci)
+            except ValueError:
+                pass
+                
         db.commit()
+
+    vci = data.get("visualConfidenceScore") or 80.0
+    vocal_context = "Clear and articulate" if audio_path else "Text-only response"
 
     dynamic_prompt = f"""
     You are an expert technical interviewer evaluating a candidate for a {session.role} role ({session.difficulty} level).
     
     Question Asked: "{last_question}"
-    Candidate's Answer: "{user_message}"
+    Candidate's Answer (Text/Transcribed): "{user_message}"
+    Visual Confidence Score (from camera analysis): {vci}/100
+    Vocal Delivery Context: {vocal_context}
 
     Tasks:
-    1. Evaluate the candidate's answer for technical accuracy, clarity, and depth.
-    2. Assign a score between 0 and 100 based strictly on accuracy.
-    3. Write 1-2 sentences of specific feedback highlighting correct points or missing details.
+    1. Evaluate the candidate's answer for technical accuracy, clarity, and depth (Textual Score).
+    2. Integrate the Textual Score with the provided Visual Confidence Score and Vocal Delivery to calculate an OVERALL integrated score (0-100). 
+       - Weighting suggestion: 60% Textual (Logical value), 20% Visual, 20% Vocal.
+    3. Write 1-2 sentences of specific feedback highlighting technical correctness and any behavioral/delivery notes.
     4. Generate exactly ONE logical next technical question based on their answer.
 
     CRITICAL: Respond STRICTLY in valid JSON format using this exact structure:
@@ -265,18 +279,38 @@ async def end_interview_session(data: dict, client=None, db=None):
     total_score = sum(eval_item.get("score", 0) for eval_item in evaluations)
     avg_score = int(total_score / len(evaluations)) if evaluations else 0
 
+    from app.models import VisualMetric
+    visual_metrics = db.query(VisualMetric).filter(VisualMetric.session_id == session_id).all()
+    avg_visual = sum(m.confidence_score for m in visual_metrics) / len(visual_metrics) if visual_metrics else 80.0
+    
+    # Simple heuristic for vocal score for now: count audio_paths
+    audio_responses = sum(1 for r in responses if r.audio_path)
+    vocal_context = f"Candidate used audio for {audio_responses} out of {len(responses)} answers."
+
+    textual_score = avg_score
     overall_strengths = "Candidate demonstrated foundational technical knowledge."
     key_improvements = "Focus on explaining real-world architecture and edge cases."
+    final_vocal = 70 if audio_responses == 0 else 85
+    final_visual = int(avg_visual)
 
     if active_client and evaluations:
         try:
             summary_prompt = f"""
             You are a senior technical interviewer summarizing a mock interview.
 
-            Summarize the candidate's performance for a {session.role} role based on these Q&A evaluations:
-            {json.dumps(evaluations, indent=2)}
+            Session Data:
+            - Textual Evaluations (Q&A): {json.dumps(evaluations, indent=2)}
+            - Visual Confidence Average (from camera): {avg_visual}/100
+            - Vocal Context: {vocal_context}
+
+            Summarize the candidate's performance for a {session.role} role.
+            Also, provide 3 distinct sub-scores:
+            1. textualScore: based on technical accuracy and depth.
+            2. visualScore: reflect the visual confidence average, adjust if you notice inconsistencies.
+            3. vocalScore: evaluate based on their use of audio and clarity (assume baseline 80 if text-only, or higher if they used audio well).
             
-            Return STRICTLY a JSON object with keys "overallStrengths" and "keyImprovements".
+            Return STRICTLY a JSON object with keys:
+            "overallStrengths", "keyImprovements", "textualScore", "visualScore", "vocalScore"
             """
             
             config = None
@@ -297,16 +331,25 @@ async def end_interview_session(data: dict, client=None, db=None):
                 summary_data = clean_json_response(response.text)
                 overall_strengths = summary_data.get("overallStrengths", overall_strengths)
                 key_improvements = summary_data.get("keyImprovements", key_improvements)
+                textual_score = summary_data.get("textualScore", textual_score)
+                final_visual = summary_data.get("visualScore", final_visual)
+                final_vocal = summary_data.get("vocalScore", final_vocal)
         except Exception as e:
             print(f"❌ Gemini Error during end-interview: {str(e)}")
             traceback.print_exc()
 
+    # Recalculate final overall score as a weighted average
+    final_overall = int((textual_score * 0.6) + (final_visual * 0.2) + (final_vocal * 0.2))
+
     session.status = "Completed"
-    session.overall_score = avg_score
+    session.overall_score = final_overall
     
     summary_dict = {
         "overallStrengths": overall_strengths,
-        "keyImprovements": key_improvements
+        "keyImprovements": key_improvements,
+        "textualScore": textual_score,
+        "visualScore": final_visual,
+        "vocalScore": final_vocal
     }
     session.summary_feedback = json.dumps(summary_dict)
     

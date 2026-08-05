@@ -46,10 +46,11 @@ async def chat_interview(
         body = await request.json()
         payload = body
     else:
-       
+        form = await request.form()
         payload = {
             "sessionId": sessionId,
-            "message": message or ""
+            "message": message or "",
+            "visualConfidenceScore": form.get("visualConfidenceScore")
         }
 
     
@@ -60,51 +61,47 @@ async def chat_interview(
     
     return await continue_interview_session(payload, gemini_client, db)
 
+from app.services.visual_analysis import analyze_frame
+
 @router.post("/api/analyze-visual")
 async def analyze_visual(data: dict, db: Session = Depends(get_db)):
     session_id = data.get("sessionId")
-    frame_b64 = data.get("frame")
+    # The frontend payload might use "image_base64" or "frame"
+    frame_b64 = data.get("image_base64") or data.get("frame")
+    
     if not session_id or not frame_b64:
-        return {"success": False, "message": "No sessionId or frame provided"}
+        return {"status": "ERROR", "warning_message": "No sessionId or frame provided"}
         
     session = db.query(InterviewSession).filter(InterviewSession.session_id == session_id).first()
     
     if session and session.interview_mode == "TEXT":
-        return {"success": True, "message": "TEXT mode active, skipping visual analysis"}
+        return {"status": "SKIPPED", "warning_message": "TEXT mode active, skipping visual analysis"}
         
     try:
-        # Decode base64
-        header, encoded = frame_b64.split(",", 1) if "," in frame_b64 else ("", frame_b64)
-        nparr = np.frombuffer(base64.b64decode(encoded), np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        # Call the new Visual Analysis Engine
+        analysis_result = analyze_frame(frame_b64, session_id)
         
-        # Simple Face Detection for confidence score
-        score = 85.0  # default fallback
-        emotion = "Neutral"
-        
-        if mp_face_detection is not None:
-            with mp_face_detection.FaceDetection(model_selection=0, min_detection_confidence=0.5) as face_detection:
-                results = face_detection.process(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-                if results.detections:
-                    # Get the confidence score of the first detected face
-                    score = float(results.detections[0].score[0]) * 100
-                    emotion = "Attentive" if score > 75 else "Neutral"
-                else:
-                    return {"confidence_score": 0, "detected_emotion": "No Face Detected", "status": "No Face"}
-                
-        # Save to DB
+        # Save to DB metric history
         new_metric = VisualMetric(
             session_id=session_id,
-            confidence_score=score,
-            emotion=emotion
+            confidence_score=analysis_result.get("visual_confidence_score", 0.0),
+            emotion=analysis_result.get("eye_contact_status", "UNKNOWN")  # Storing status here for compatibility
         )
         db.add(new_metric)
         db.commit()
         
-        return {"success": True, "confidenceScore": round(score, 1), "emotion": emotion, "eye_contact_score": 80}
+        return analysis_result
     except Exception as e:
-        print(f"Visual Analysis Error: {e}")
-        return {"confidence_score": 85, "eye_contact_score": 80, "emotion": "Neutral", "status": "Success", "success": True}
+        print(f"Visual Analysis Route Error: {e}")
+        return {
+            "status": "ERROR",
+            "visual_confidence_score": 0.0,
+            "gaze_score": 0.0,
+            "head_stability_score": 0.0,
+            "eye_contact_status": "UNKNOWN",
+            "head_pose_status": "UNKNOWN",
+            "warning_message": str(e)
+        }
 
 @router.get("/api/audio-file/{response_id}")
 async def get_audio_file(response_id: int, user_id: int, db: Session = Depends(get_db)):
@@ -186,3 +183,14 @@ async def get_interview_session_details(session_id: str, db: Session = Depends(g
             "evaluations": evaluations
         }
     }
+
+@router.delete("/api/interview-session/{session_id}")
+async def delete_interview_session(session_id: str, db: Session = Depends(get_db)):
+    session = db.query(InterviewSession).filter(InterviewSession.session_id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+        
+    db.delete(session)
+    db.commit()
+    
+    return {"success": True, "message": "Interview session deleted successfully"}

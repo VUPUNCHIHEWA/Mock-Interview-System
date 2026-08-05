@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
-import { Calendar, Target, Award, PlayCircle, Loader2, ArrowRight } from 'lucide-react';
+import { Calendar, Target, Award, PlayCircle, Loader2, ArrowRight, Trash2 } from 'lucide-react';
 
 const History = () => {
     const [history, setHistory] = useState([]);
     const [loading, setLoading] = useState(true);
     const [fetchingDetails, setFetchingDetails] = useState(null);
+    const [deletingId, setDeletingId] = useState(null);
     const navigate = useNavigate();
 
     useEffect(() => {
@@ -42,6 +43,23 @@ const History = () => {
             alert("Could not load interview details.");
         } finally {
             setFetchingDetails(null);
+        }
+    };
+
+    const handleRemoveSession = async (sessionId) => {
+        if (!window.confirm("Are you sure you want to delete this interview session? This action cannot be undone.")) return;
+        
+        setDeletingId(sessionId);
+        try {
+            const response = await axios.delete(`http://localhost:8000/api/interview-session/${sessionId}`);
+            if (response.data.success) {
+                setHistory(history.filter(session => session.sessionId !== sessionId));
+            }
+        } catch (err) {
+            console.error("Error deleting session:", err);
+            alert("Could not delete the interview session.");
+        } finally {
+            setDeletingId(null);
         }
     };
 
@@ -95,13 +113,22 @@ const History = () => {
                                 {session.status === 'Completed' && (
                                     <button 
                                         onClick={() => handleViewDetails(session.sessionId)}
-                                        disabled={fetchingDetails === session.sessionId}
-                                        className="ml-auto md:ml-0 bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2"
+                                        disabled={fetchingDetails === session.sessionId || deletingId === session.sessionId}
+                                        className="ml-auto md:ml-0 bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 disabled:opacity-50"
                                     >
                                         {fetchingDetails === session.sessionId ? <Loader2 size={14} className="animate-spin" /> : "View Details"}
                                         <ArrowRight size={14} />
                                     </button>
                                 )}
+                                
+                                <button
+                                    onClick={() => handleRemoveSession(session.sessionId)}
+                                    disabled={deletingId === session.sessionId || fetchingDetails === session.sessionId}
+                                    className="bg-red-50 hover:bg-red-100 text-red-500 p-2 rounded-xl transition-all disabled:opacity-50"
+                                    title="Delete session"
+                                >
+                                    {deletingId === session.sessionId ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                                </button>
                             </div>
                             
                         </div>
