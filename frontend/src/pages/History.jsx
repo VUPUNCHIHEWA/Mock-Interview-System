@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
-import { Calendar, Target, Award, PlayCircle, Loader2, ArrowRight, Trash2 } from 'lucide-react';
+import { Calendar, Target, Award, PlayCircle, Loader2, ArrowRight, Trash2, MessageSquare, Video } from 'lucide-react';
 
 const History = () => {
     const [history, setHistory] = useState([]);
@@ -71,26 +71,19 @@ const History = () => {
         );
     }
 
-    return (
-        <div className="p-6 md:p-10 animate-in fade-in duration-500 max-w-6xl mx-auto">
-            <h1 className="text-3xl font-black text-slate-900 tracking-tighter uppercase italic flex items-center gap-3 mb-8">
-                <Calendar className="text-blue-500" size={32} />
-                Interview History
-            </h1>
+    const textInterviews = history.filter(session => session.interviewMode?.toUpperCase() === 'TEXT');
+    const multimodalInterviews = history.filter(session => session.interviewMode?.toUpperCase() !== 'TEXT');
 
-            {history.length === 0 ? (
-                <div className="bg-slate-50 border border-slate-100 p-10 rounded-[2rem] text-center shadow-sm">
-                    <p className="text-slate-500 font-medium">You haven't completed any mock interviews yet.</p>
-                    <button 
-                        onClick={() => navigate('/InterviewSetup')}
-                        className="mt-6 bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-xl font-bold transition-colors inline-flex items-center gap-2"
-                    >
-                        Start Your First Interview <PlayCircle size={18} />
-                    </button>
-                </div>
-            ) : (
+    const renderSessionList = (sessionsList, title, Icon) => {
+        if (sessionsList.length === 0) return null;
+
+        return (
+            <div className="mb-10">
+                <h2 className="text-xl font-bold text-slate-800 mb-6 flex items-center gap-2">
+                    <Icon size={24} className="text-blue-500" /> {title}
+                </h2>
                 <div className="grid gap-4">
-                    {history.map((session, idx) => (
+                    {sessionsList.map((session, idx) => (
                         <div key={idx} className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm hover:shadow-md transition-shadow flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
                             
                             <div className="flex items-center gap-4">
@@ -134,6 +127,32 @@ const History = () => {
                         </div>
                     ))}
                 </div>
+            </div>
+        );
+    };
+
+    return (
+        <div className="p-6 md:p-10 animate-in fade-in duration-500 max-w-6xl mx-auto">
+            <h1 className="text-3xl font-black text-slate-900 tracking-tighter uppercase italic flex items-center gap-3 mb-8">
+                <Calendar className="text-blue-500" size={32} />
+                Interview History
+            </h1>
+
+            {history.length === 0 ? (
+                <div className="bg-slate-50 border border-slate-100 p-10 rounded-[2rem] text-center shadow-sm">
+                    <p className="text-slate-500 font-medium">You haven't completed any mock interviews yet.</p>
+                    <button 
+                        onClick={() => navigate('/InterviewSetup')}
+                        className="mt-6 bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-xl font-bold transition-colors inline-flex items-center gap-2"
+                    >
+                        Start Your First Interview <PlayCircle size={18} />
+                    </button>
+                </div>
+            ) : (
+                <>
+                    {renderSessionList(multimodalInterviews, "Multimodal Interviews", Video)}
+                    {renderSessionList(textInterviews, "Text-Only Interviews", MessageSquare)}
+                </>
             )}
         </div>
     );

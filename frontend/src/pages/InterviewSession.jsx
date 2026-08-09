@@ -315,7 +315,12 @@ const InterviewSession = () => {
             if (response.data.success) {
                 setChatHistory(prev => [...prev, { sender: "ai", text: response.data.nextQuestion, evaluation: response.data.evaluation }]);
             } else {
-                setChatHistory(prev => [...prev, { sender: "ai", text: "Sorry, I couldn't process that response." }]);
+                if (response.data.limit_exceeded) {
+                    alert(response.data.message || "Gemini API limit exceeded.");
+                    setChatHistory(prev => [...prev, { sender: "ai", text: "Gemini API limit exceeded. Please try again later." }]);
+                } else {
+                    setChatHistory(prev => [...prev, { sender: "ai", text: "Sorry, I couldn't process that response." }]);
+                }
             }
         } catch (error) {
             console.error("Failed to communicate with backend:", error);
@@ -353,7 +358,12 @@ const InterviewSession = () => {
             if (response.data.success) {
                 setChatHistory(prev => [...prev, { sender: "ai", text: response.data.nextQuestion, evaluation: response.data.evaluation }]);
             } else {
-                setChatHistory(prev => [...prev, { sender: "ai", text: "Sorry, I couldn't process that response." }]);
+                if (response.data.limit_exceeded) {
+                    alert(response.data.message || "Gemini API limit exceeded.");
+                    setChatHistory(prev => [...prev, { sender: "ai", text: "Gemini API limit exceeded. Please try again later." }]);
+                } else {
+                    setChatHistory(prev => [...prev, { sender: "ai", text: "Sorry, I couldn't process that response." }]);
+                }
             }
         } catch (error) {
             console.error("Failed to communicate with backend:", error);

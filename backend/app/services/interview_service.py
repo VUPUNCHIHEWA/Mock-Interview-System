@@ -170,7 +170,28 @@ async def continue_interview_session(data: dict, client=None, db=None):
     vci = data.get("visualConfidenceScore") or 80.0
     vocal_context = "Clear and articulate" if audio_path else "Text-only response"
 
-    dynamic_prompt = f"""
+    if session.interview_mode and session.interview_mode.upper() == "TEXT":
+        dynamic_prompt = f"""
+    You are an expert technical interviewer evaluating a candidate for a {session.role} role ({session.difficulty} level).
+    
+    Question Asked: "{last_question}"
+    Candidate's Answer (Text/Transcribed): "{user_message}"
+
+    Tasks:
+    1. Evaluate the candidate's answer EXCLUSIVELY for logical and relevant accuracy (Score 0-100). Do not judge grammar or delivery.
+    2. Write 1-2 sentences of specific feedback highlighting technical correctness and logic.
+    3. Generate exactly ONE logical next technical question based on their answer.
+
+    CRITICAL: Respond STRICTLY in valid JSON format using this exact structure:
+    {{
+        "score": 85,
+        "feedback": "Your answer covered...",
+        "nextQuestion": "Your next question..."
+    }}
+    Do NOT add any intro, outro, or additional text outside the JSON object.
+    """
+    else:
+        dynamic_prompt = f"""
     You are an expert technical interviewer evaluating a candidate for a {session.role} role ({session.difficulty} level).
     
     Question Asked: "{last_question}"
@@ -224,8 +245,15 @@ async def continue_interview_session(data: dict, client=None, db=None):
                 else:
                     print("⚠️ JSON parsed but missing expected keys.")
         except Exception as e:
+            error_msg = str(e).lower()
             print(f"❌ Gemini Error during chat-interview: {str(e)}")
             traceback.print_exc()
+            if "429" in error_msg or "quota" in error_msg or "exhausted" in error_msg:
+                return {
+                    "success": False,
+                    "limit_exceeded": True,
+                    "message": "Gemini API reach limit exceeded. Please try again later."
+                }
 
     if last_response and last_response.score is None:
         last_response.score = default_eval.get("score", 75)
@@ -295,23 +323,47 @@ async def end_interview_session(data: dict, client=None, db=None):
 
     if active_client and evaluations:
         try:
-            summary_prompt = f"""
-            You are a senior technical interviewer summarizing a mock interview.
-
-            Session Data:
-            - Textual Evaluations (Q&A): {json.dumps(evaluations, indent=2)}
-            - Visual Confidence Average (from camera): {avg_visual}/100
-            - Vocal Context: {vocal_context}
-
-            Summarize the candidate's performance for a {session.role} role.
-            Also, provide 3 distinct sub-scores:
-            1. textualScore: based on technical accuracy and depth.
-            2. visualScore: reflect the visual confidence average, adjust if you notice inconsistencies.
-            3. vocalScore: evaluate based on their use of audio and clarity (assume baseline 80 if text-only, or higher if they used audio well).
+            is_text_mode = session.interview_mode and session.interview_mode.upper() == "TEXT"
             
-            Return STRICTLY a JSON object with keys:
-            "overallStrengths", "keyImprovements", "textualScore", "visualScore", "vocalScore"
-            """
+            if is_text_mode:
+                summary_prompt = f"""
+                You are a senior technical interviewer summarizing a mock interview.
+
+                Session Data:
+                - Textual Evaluations (Q&A): {json.dumps(evaluations, indent=2)}
+
+                Provide a highly detailed, constructive, and organized summary of the candidate's performance for a {session.role} role.
+                Focus strictly on technical accuracy, logical reasoning, and depth of knowledge.
+
+                You must provide:
+                1. "overallStrengths": An array of 3-5 specific, detailed bullet points highlighting what the candidate did well.
+                2. "keyImprovements": An array of 3-5 specific, actionable bullet points for areas they need to improve.
+                3. "textualScore": An overall score (0-100) based strictly on technical accuracy.
+                
+                Return STRICTLY a JSON object with keys:
+                "overallStrengths" (array of strings), "keyImprovements" (array of strings), "textualScore" (integer)
+                """
+            else:
+                summary_prompt = f"""
+                You are a senior technical interviewer summarizing a mock interview.
+
+                Session Data:
+                - Textual Evaluations (Q&A): {json.dumps(evaluations, indent=2)}
+                - Visual Confidence Average (from camera): {avg_visual}/100
+                - Vocal Context: {vocal_context}
+
+                Provide a highly detailed, constructive, and organized summary of the candidate's performance for a {session.role} role.
+                
+                You must provide:
+                1. "overallStrengths": An array of 3-5 specific, detailed bullet points highlighting what the candidate did well technically and communicatively.
+                2. "keyImprovements": An array of 3-5 specific, actionable bullet points for areas they need to improve.
+                3. "textualScore": based on technical accuracy and depth.
+                4. "visualScore": reflect the visual confidence average, adjust if you notice inconsistencies.
+                5. "vocalScore": evaluate based on their use of audio and clarity (assume baseline 80 if text-only, or higher if they used audio well).
+                
+                Return STRICTLY a JSON object with keys:
+                "overallStrengths" (array of strings), "keyImprovements" (array of strings), "textualScore" (integer), "visualScore" (integer), "vocalScore" (integer)
+                """
             
             config = None
             if gemini_types:
@@ -339,7 +391,10 @@ async def end_interview_session(data: dict, client=None, db=None):
             traceback.print_exc()
 
     # Recalculate final overall score as a weighted average
-    final_overall = int((textual_score * 0.6) + (final_visual * 0.2) + (final_vocal * 0.2))
+    if session.interview_mode and session.interview_mode.upper() == "TEXT":
+        final_overall = textual_score
+    else:
+        final_overall = int((textual_score * 0.6) + (final_visual * 0.2) + (final_vocal * 0.2))
 
     session.status = "Completed"
     session.overall_score = final_overall
@@ -360,5 +415,6 @@ async def end_interview_session(data: dict, client=None, db=None):
         "overallScore": avg_score,
         "overallStrengths": overall_strengths,
         "keyImprovements": key_improvements,
-        "evaluations": evaluations
+        "evaluations": evaluations,
+        "interviewMode": session.interview_mode
     }

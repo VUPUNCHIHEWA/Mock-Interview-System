@@ -17,8 +17,8 @@ const InterviewResults = () => {
             <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-8">
                 <AlertCircle size={48} className="text-slate-400 mb-4" />
                 <h2 className="text-xl font-bold text-slate-700">No results found.</h2>
-                <button 
-                    onClick={() => navigate('/dashboard')} 
+                <button
+                    onClick={() => navigate('/dashboard')}
                     className="mt-6 bg-blue-600 text-white px-6 py-2 rounded-xl font-bold hover:bg-blue-500"
                 >
                     Back to Dashboard
@@ -27,7 +27,9 @@ const InterviewResults = () => {
         );
     }
 
-    const { overallScore, overallStrengths, keyImprovements, evaluations } = results;
+    const { overallScore, overallStrengths, keyImprovements, evaluations, interviewMode } = results;
+
+    const isTextMode = interviewMode && interviewMode.toUpperCase() === 'TEXT';
 
     // The backend now sends textualScore, visualScore, and vocalScore if available in the result payload directly
     // Wait, let's parse from results if they exist.
@@ -44,11 +46,11 @@ const InterviewResults = () => {
     return (
         <div className="min-h-screen bg-slate-50/50 p-4 md:p-8 animate-in fade-in duration-700">
             <div className="max-w-5xl mx-auto space-y-8">
-                
+
                 {/* Header */}
                 <div className="flex justify-between items-center">
-                    <button 
-                        onClick={() => navigate('/dashboard')} 
+                    <button
+                        onClick={() => navigate('/dashboard')}
                         className="group flex items-center gap-2 text-slate-400 hover:text-slate-900 transition-all font-bold text-[10px] uppercase tracking-[0.2em]"
                     >
                         <LayoutDashboard size={14} className="group-hover:-translate-x-1 transition-transform" /> Back to Dashboard
@@ -66,14 +68,14 @@ const InterviewResults = () => {
 
                 {/* Score & Gemini Summary */}
                 <div className="grid grid-cols-1 md:grid-cols-12 gap-8">
-                    
+
                     {/* Score Card */}
                     <div className="md:col-span-4 bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm flex flex-col items-center justify-center text-center">
-                        <h3 className="text-xs font-black uppercase tracking-widest text-slate-400 mb-6">Integrated Score</h3>
+                        <h3 className="text-xs font-black uppercase tracking-widest text-slate-400 mb-6">{isTextMode ? 'Textual Score' : 'Integrated Score'}</h3>
                         <div className="w-40 h-40 mb-6">
-                            <CircularProgressbar 
-                                value={overallScore} 
-                                text={`${overallScore}%`} 
+                            <CircularProgressbar
+                                value={overallScore}
+                                text={`${overallScore}%`}
                                 styles={buildStyles({
                                     pathColor: getScoreColor(overallScore),
                                     textColor: '#0f172a',
@@ -83,36 +85,38 @@ const InterviewResults = () => {
                                 className="font-black"
                             />
                         </div>
-                        
-                        <div className="w-full space-y-3 mt-4 text-left">
-                            <div>
-                                <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest mb-1 text-slate-500">
-                                    <span>📝 Textual Accuracy</span>
-                                    <span className="text-slate-700">{textualScore}%</span>
+
+                        {!isTextMode && (
+                            <div className="w-full space-y-3 mt-4 text-left">
+                                <div>
+                                    <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest mb-1 text-slate-500">
+                                        <span>📝 Textual Accuracy</span>
+                                        <span className="text-slate-700">{textualScore}%</span>
+                                    </div>
+                                    <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                                        <div className="h-full transition-all duration-1000" style={{ width: `${textualScore}%`, backgroundColor: getScoreColor(textualScore) }}></div>
+                                    </div>
                                 </div>
-                                <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
-                                    <div className="h-full transition-all duration-1000" style={{ width: `${textualScore}%`, backgroundColor: getScoreColor(textualScore) }}></div>
+                                <div>
+                                    <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest mb-1 text-slate-500">
+                                        <span>🎥 Visual Confidence</span>
+                                        <span className="text-slate-700">{visualScore}%</span>
+                                    </div>
+                                    <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                                        <div className="h-full transition-all duration-1000" style={{ width: `${visualScore}%`, backgroundColor: getScoreColor(visualScore) }}></div>
+                                    </div>
+                                </div>
+                                <div>
+                                    <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest mb-1 text-slate-500">
+                                        <span>🎙️ Vocal Delivery</span>
+                                        <span className="text-slate-700">{vocalScore}%</span>
+                                    </div>
+                                    <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                                        <div className="h-full transition-all duration-1000" style={{ width: `${vocalScore}%`, backgroundColor: getScoreColor(vocalScore) }}></div>
+                                    </div>
                                 </div>
                             </div>
-                            <div>
-                                <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest mb-1 text-slate-500">
-                                    <span>🎥 Visual Confidence</span>
-                                    <span className="text-slate-700">{visualScore}%</span>
-                                </div>
-                                <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
-                                    <div className="h-full transition-all duration-1000" style={{ width: `${visualScore}%`, backgroundColor: getScoreColor(visualScore) }}></div>
-                                </div>
-                            </div>
-                            <div>
-                                <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest mb-1 text-slate-500">
-                                    <span>🎙️ Vocal Delivery</span>
-                                    <span className="text-slate-700">{vocalScore}%</span>
-                                </div>
-                                <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
-                                    <div className="h-full transition-all duration-1000" style={{ width: `${vocalScore}%`, backgroundColor: getScoreColor(vocalScore) }}></div>
-                                </div>
-                            </div>
-                        </div>
+                        )}
                     </div>
 
                     {/* AI Feedback */}
@@ -122,15 +126,23 @@ const InterviewResults = () => {
                                 <CheckCircle className="text-green-500" size={24} />
                                 <h3 className="text-sm font-black uppercase tracking-widest text-slate-800">Overall Strengths</h3>
                             </div>
-                            <p className="text-slate-600 leading-relaxed font-medium">{overallStrengths}</p>
+                            <ul className="list-disc pl-5 text-slate-600 leading-relaxed font-medium space-y-2">
+                                {Array.isArray(overallStrengths) 
+                                    ? overallStrengths.map((str, i) => <li key={i}>{str}</li>) 
+                                    : <li>{overallStrengths}</li>}
+                            </ul>
                         </div>
-                        
+
                         <div className="bg-white p-8 rounded-[2rem] border border-slate-100 shadow-sm">
                             <div className="flex items-center gap-3 mb-4">
                                 <TrendingUp className="text-orange-500" size={24} />
                                 <h3 className="text-sm font-black uppercase tracking-widest text-slate-800">Key Areas for Improvement</h3>
                             </div>
-                            <p className="text-slate-600 leading-relaxed font-medium">{keyImprovements}</p>
+                            <ul className="list-disc pl-5 text-slate-600 leading-relaxed font-medium space-y-2">
+                                {Array.isArray(keyImprovements) 
+                                    ? keyImprovements.map((str, i) => <li key={i}>{str}</li>) 
+                                    : <li>{keyImprovements}</li>}
+                            </ul>
                         </div>
                     </div>
                 </div>
@@ -141,11 +153,11 @@ const InterviewResults = () => {
                         <span className="bg-slate-900 text-white w-6 h-6 rounded-full flex items-center justify-center text-[10px]">Q</span>
                         Question Breakdown
                     </h3>
-                    
+
                     <div className="space-y-4">
                         {evaluations && evaluations.length > 0 ? evaluations.map((item, index) => (
                             <div key={index} className="border border-slate-100 rounded-2xl overflow-hidden shadow-sm transition-all">
-                                <button 
+                                <button
                                     onClick={() => setExpandedQ(expandedQ === index ? null : index)}
                                     className="w-full bg-slate-50 p-5 flex items-center justify-between text-left hover:bg-slate-100 transition-colors"
                                 >
@@ -160,7 +172,7 @@ const InterviewResults = () => {
                                     </div>
                                     {expandedQ === index ? <ChevronUp className="text-slate-400" /> : <ChevronDown className="text-slate-400" />}
                                 </button>
-                                
+
                                 {expandedQ === index && (
                                     <div className="p-6 bg-white border-t border-slate-100 space-y-6">
                                         <div>

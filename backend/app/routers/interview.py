@@ -166,11 +166,17 @@ async def get_interview_session_details(session_id: str, db: Session = Depends(g
     import json
     overall_strengths = "No feedback available."
     key_improvements = ""
+    textual_score = session.overall_score
+    visual_score = 80
+    vocal_score = 80
     if session.summary_feedback:
         try:
             summary_dict = json.loads(session.summary_feedback)
             overall_strengths = summary_dict.get("overallStrengths", overall_strengths)
             key_improvements = summary_dict.get("keyImprovements", key_improvements)
+            textual_score = summary_dict.get("textualScore", textual_score)
+            visual_score = summary_dict.get("visualScore", visual_score)
+            vocal_score = summary_dict.get("vocalScore", vocal_score)
         except Exception:
             overall_strengths = session.summary_feedback
         
@@ -180,7 +186,11 @@ async def get_interview_session_details(session_id: str, db: Session = Depends(g
             "overallScore": session.overall_score,
             "overallStrengths": overall_strengths,
             "keyImprovements": key_improvements,
-            "evaluations": evaluations
+            "evaluations": evaluations,
+            "interviewMode": session.interview_mode,
+            "textualScore": textual_score,
+            "visualScore": visual_score,
+            "vocalScore": vocal_score
         }
     }
 
