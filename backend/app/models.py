@@ -95,6 +95,12 @@ class InterviewResponse(Base):
     score = Column(Float, nullable=True)
     feedback = Column(Text, nullable=True)
     visual_confidence_score = Column(Float, nullable=True)
+    # --- BSc Research Feature (Step 3): real voice-confidence metrics,
+    # replacing the previous fake heuristic. Nullable since these are
+    # only computed when an audio answer is provided.
+    filler_word_count = Column(Integer, nullable=True)
+    long_pause_count = Column(Integer, nullable=True)
+    pitch_variation = Column(Float, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     session = relationship("InterviewSession", back_populates="responses")
@@ -109,4 +115,3 @@ class VisualMetric(Base):
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
     
     session = relationship("InterviewSession")
-

@@ -16,6 +16,7 @@ import InterviewSetup from './pages/InterviewSetup';
 import InterviewSession from './pages/InterviewSession';
 import InterviewResults from './pages/InterviewResults';
 import Profile from './pages/Profile';
+import ProgressPage from './pages/ProgressPage';
 const MainLayout = ({ children }) => (
   <div className="flex min-h-screen bg-transparent text-slate-900">
     <Sidebar />
@@ -31,14 +32,14 @@ function App() {
   return (
     <BrowserRouter>
       <Routes>
-        
+
         <Route path="/" element={<Landing />} />
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
         <Route path="/consent" element={<Consent />} />
         <Route path="/verify-otp" element={<VerifyOTP />} />
 
-        
+
         <Route path="/dashboard" element={<MainLayout><Dashboard /></MainLayout>} />
         <Route path="/InterviewSetup" element={<MainLayout><InterviewSetup /></MainLayout>} />
         <Route path="/interview" element={<MainLayout><Interview /></MainLayout>} />
@@ -49,7 +50,8 @@ function App() {
 
         <Route path="/interview-session" element={<InterviewSession />} />
         <Route path="/interview-results" element={<MainLayout><InterviewResults /></MainLayout>} />
-        
+        <Route path="/progress" element={<MainLayout><ProgressPage /></MainLayout>} />
+
       </Routes>
     </BrowserRouter>
   );

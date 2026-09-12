@@ -16,6 +16,7 @@ except Exception:
     mp = None
     mp_face_detection = None
 from app.services.interview_service import continue_interview_session, start_interview_session, end_interview_session
+from app.services.progress_tracker import get_user_progress
 
 router = APIRouter()
 
@@ -82,9 +83,13 @@ async def analyze_visual(data: dict, db: Session = Depends(get_db)):
         analysis_result = analyze_frame(frame_b64, session_id)
         
         # Save to DB metric history
+        # NOTE (BSc Research Feature, Step 2): confidence_score can now be
+        # None when no face was detected in this frame (see
+        # visual_analysis.py) - the DB column is nullable, so this is
+        # stored as-is rather than defaulting to a misleading 0.0/fake value.
         new_metric = VisualMetric(
             session_id=session_id,
-            confidence_score=analysis_result.get("visual_confidence_score", 0.0),
+            confidence_score=analysis_result.get("visual_confidence_score"),
             emotion=analysis_result.get("eye_contact_status", "UNKNOWN")  # Storing status here for compatibility
         )
         db.add(new_metric)
@@ -152,23 +157,44 @@ async def get_interview_session_details(session_id: str, db: Session = Depends(g
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
         
-    responses = db.query(InterviewResponse).filter(InterviewResponse.session_id == session_id).order_by(InterviewResponse.created_at.asc()).all()
+    responses = db.query(InterviewResponse).filter(
+        InterviewResponse.session_id == session_id,
+        InterviewResponse.user_answer != None
+    ).order_by(InterviewResponse.id.asc()).all()
     
+    # --- BUG FIX (consistency with end_interview_session, Function 5
+    # fix): each item now carries isSkipped/isNotEvaluated flags so the
+    # Interview Results page can display them distinctly instead of
+    # showing a numeric score for questions that were never actually
+    # scored - matching the fix already applied to the immediate
+    # end-interview response.
     evaluations = []
     for r in responses:
+        is_skipped = (r.user_answer == "[Skipped by student]")
+        is_not_evaluated = (r.score is None and not is_skipped)
         evaluations.append({
             "question": r.question_text,
             "answer": r.user_answer,
             "score": r.score,
-            "feedback": r.feedback
+            "feedback": r.feedback,
+            "isSkipped": is_skipped,
+            "isNotEvaluated": is_not_evaluated,
         })
         
     import json
     overall_strengths = "No feedback available."
     key_improvements = ""
     textual_score = session.overall_score
-    visual_score = 80
-    vocal_score = 80
+    # --- BUG FIX: previously defaulted to fake placeholder values (80,
+    # 80) when summary_feedback couldn't be parsed or didn't contain
+    # these keys - silently fabricating "good-looking" scores instead of
+    # honestly reporting that this session has no visual/vocal data.
+    # Consistent with the project-wide never-fabricate-data policy
+    # (see Step 2/3/Function-5 fixes) - now defaults to None, displayed
+    # as "N/A" by the frontend.
+    visual_score = None
+    vocal_score = None
+    confidence_level = "NOT_AVAILABLE"
     if session.summary_feedback:
         try:
             summary_dict = json.loads(session.summary_feedback)
@@ -177,6 +203,7 @@ async def get_interview_session_details(session_id: str, db: Session = Depends(g
             textual_score = summary_dict.get("textualScore", textual_score)
             visual_score = summary_dict.get("visualScore", visual_score)
             vocal_score = summary_dict.get("vocalScore", vocal_score)
+            confidence_level = summary_dict.get("confidenceLevel", confidence_level)
         except Exception:
             overall_strengths = session.summary_feedback
         
@@ -190,7 +217,16 @@ async def get_interview_session_details(session_id: str, db: Session = Depends(g
             "interviewMode": session.interview_mode,
             "textualScore": textual_score,
             "visualScore": visual_score,
-            "vocalScore": vocal_score
+            "vocalScore": vocal_score,
+            "confidenceLevel": confidence_level,
+            # --- BSc Research Feature (Function 5, Suggestion #2/#4):
+            # session context, consistent with the immediate
+            # end-interview response (see interview_service.py) - fixes
+            # the "role/date shows right after ending, but disappears
+            # when reopened from History" inconsistency.
+            "role": session.role,
+            "difficulty": session.difficulty,
+            "createdAt": session.created_at.isoformat() if session.created_at else None,
         }
     }
 
@@ -204,3 +240,17 @@ async def delete_interview_session(session_id: str, db: Session = Depends(get_db
     db.commit()
     
     return {"success": True, "message": "Interview session deleted successfully"}
+
+
+# --- BSc Research Feature (Step 5): ⭐ Progress Tracker endpoint - core
+# research contribution, compares a user's earliest and most recent
+# completed sessions (see progress_tracker.py for the comparison logic
+# and literature citations).
+@router.get("/api/progress/{user_id}")
+async def get_progress(user_id: int, db: Session = Depends(get_db)):
+    try:
+        result = get_user_progress(db, user_id)
+        return {"success": True, **result}
+    except Exception as e:
+        print(f"❌ Error in get-progress: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
