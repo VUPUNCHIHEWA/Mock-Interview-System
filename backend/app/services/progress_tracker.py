@@ -63,6 +63,47 @@ def _parse_summary(session) -> dict:
         return {}
 
 
+def is_valid_comparison_group(session_a, session_b) -> tuple:
+    """
+    ⭐ CORE VALIDATION TOOL - Determines whether two sessions are
+    methodologically comparable, applying an "experimental control"
+    principle borrowed from research methodology: a fair comparison
+    requires holding relevant confounding variables constant between
+    the conditions being compared (here, between Session A and Session
+    B), so that any observed difference can be attributed to genuine
+    change over time rather than to a difference in the sessions
+    themselves.
+
+    Checks 3 dimensions of equivalence:
+    1. Same role - different job roles have different question
+       difficulty/content, making scores non-comparable.
+    2. Same difficulty level - Easy vs Hard sessions are not
+       comparable on raw score alone.
+    3. Same interview mode (TEXT vs MULTIMODAL) - a TEXT-mode session
+       has NO visual/vocal data at all; comparing it against a
+       MULTIMODAL session's visual/vocal scores would be comparing
+       real data against the complete absence of data, not a
+       meaningful change.
+
+    Returns (is_valid: bool, reason: str or None) - reason explains
+    which dimension failed, for transparent reporting to the student.
+
+    --- ASSUMPTION - not literature-derived --- these 3 specific
+    dimensions were chosen as the relevant confounding variables for
+    THIS project's context; the general principle of controlling
+    confounding variables for valid comparison is standard experimental
+    methodology, but the specific list of variables to control is a
+    researcher judgment call, not itself derived from a cited paper.
+    """
+    if session_a.role != session_b.role:
+        return False, f"different roles ({session_a.role} vs {session_b.role})"
+    if session_a.difficulty != session_b.difficulty:
+        return False, f"different difficulty levels ({session_a.difficulty} vs {session_b.difficulty})"
+    if session_a.interview_mode != session_b.interview_mode:
+        return False, f"different interview modes ({session_a.interview_mode} vs {session_b.interview_mode})"
+    return True, None
+
+
 def compare_sessions(session_old, session_new) -> dict:
     """
     Compare two InterviewSession DB rows (SQLAlchemy objects) - the
@@ -233,19 +274,65 @@ def generate_focus_area(comparison: dict) -> dict:
     return candidates[0]
 
 
-def get_user_progress(db, user_id: int) -> dict:
+def get_comparison_options(db, user_id: int) -> dict:
     """
-    Main entry point: fetches a user's earliest and most recent COMPLETED
-    sessions and returns the comparison + friendly messages.
+    ⭐ NEW: Returns the list of (role, difficulty, interview_mode)
+    combinations this user has 2+ completed sessions for - i.e., the
+    combinations that are VALID to compare. Used to populate the
+    frontend's role/difficulty/mode selection dropdowns, so the student
+    can only ever select combinations that actually have comparable
+    data, rather than guessing and hitting a "not enough data" error.
+    """
+    from app.models import InterviewSession
 
-    --- BSc Research Feature (Suggestion #1): also returns a full
-    "all_sessions" trend list (every completed session, not just the
-    first and latest) - previously, sessions between the first and
-    latest were completely invisible to the student, even though they
-    represent real progress data. This does not change the core
-    first-vs-latest comparison (kept for consistency with the original
-    fixed-length-session validity argument), but restores visibility of
-    the student's full session history.
+    completed_sessions = db.query(InterviewSession).filter(
+        InterviewSession.user_id == user_id,
+        InterviewSession.status == "Completed"
+    ).all()
+
+    groups = {}
+    for s in completed_sessions:
+        key = (s.role, s.difficulty, s.interview_mode)
+        groups.setdefault(key, []).append(s)
+
+    options = [
+        {"role": role, "difficulty": difficulty, "interview_mode": mode, "session_count": len(sessions)}
+        for (role, difficulty, mode), sessions in groups.items()
+        if len(sessions) >= 2
+    ]
+    # Most-sessions-first, so the frontend can pre-select the most data-rich option by default.
+    options.sort(key=lambda o: o["session_count"], reverse=True)
+
+    return {
+        "options": options,
+        "has_any_valid_combination": len(options) > 0,
+    }
+
+
+def get_user_progress(db, user_id: int, role: str = None, difficulty: str = None, interview_mode: str = None) -> dict:
+    """
+    Main entry point: fetches a user's completed sessions and compares
+    the earliest vs. most recent session WITHIN THE SAME role+
+    difficulty+interview_mode combination, returning the comparison +
+    friendly messages.
+
+    --- BSc Research Feature: user-selectable comparison group. Rather
+    than the system silently auto-selecting "the largest matching
+    group" (a black-box decision the student has no visibility into or
+    control over), the student can now explicitly choose which role/
+    difficulty/interview-mode combination to view progress for, via the
+    optional role/difficulty/interview_mode parameters. This gives the
+    student full transparency and control over exactly which sessions
+    are being compared - directly supporting the project's broader
+    interpretability/transparency principle (see ML Core, Doshi-Velez &
+    Kim, 2017). If no filters are provided (backward-compatible
+    default), the system falls back to auto-selecting the largest valid
+    group, as before.
+
+    See is_valid_comparison_group() for the research-methodology
+    reasoning behind requiring role+difficulty+interview_mode to match
+    (experimental-control principle: holding confounding variables
+    constant for a fair comparison).
     """
     from app.models import InterviewSession
 
@@ -261,8 +348,62 @@ def get_user_progress(db, user_id: int) -> dict:
                        f"(found {len(completed_sessions)}). Complete another session to see your progress!",
         }
 
-    session_old = completed_sessions[0]
-    session_new = completed_sessions[-1]
+    # Group sessions by (role, difficulty, interview_mode) - only
+    # sessions within the SAME group are eligible for comparison with
+    # each other.
+    groups = {}
+    for s in completed_sessions:
+        key = (s.role, s.difficulty, s.interview_mode)
+        groups.setdefault(key, []).append(s)
+
+    eligible_groups = {k: v for k, v in groups.items() if len(v) >= 2}
+
+    if not eligible_groups:
+        attempted_combos = ", ".join(
+            f"{r} / {d} / {m}" for r, d, m in groups.keys()
+        )
+        return {
+            "available": False,
+            "message": (
+                f"Progress tracking requires at least 2 completed sessions with the SAME "
+                f"role, difficulty, AND interview mode (e.g., two 'QA Engineer - Easy - "
+                f"Multimodal' sessions) so that scores are fairly comparable. You've "
+                f"completed sessions in: {attempted_combos}. Complete another session "
+                f"matching one of these combinations to see your progress!"
+            ),
+        }
+
+    if role is not None or difficulty is not None or interview_mode is not None:
+        # User explicitly selected a combination - use it if valid.
+        selected_key = (role, difficulty, interview_mode)
+        if selected_key not in eligible_groups:
+            return {
+                "available": False,
+                "message": (
+                    f"No comparable sessions found for {role} / {difficulty} / {interview_mode}. "
+                    f"Please choose a different combination from the available options."
+                ),
+            }
+        best_key = selected_key
+    else:
+        # No selection made - auto-select the largest group (backward-compatible default).
+        best_key = max(
+            eligible_groups.keys(),
+            key=lambda k: (len(eligible_groups[k]), eligible_groups[k][-1].created_at)
+        )
+
+    matched_sessions = eligible_groups[best_key]
+
+    session_old = matched_sessions[0]
+    session_new = matched_sessions[-1]
+
+    # Defensive re-validation using the dedicated validator tool.
+    is_valid, invalid_reason = is_valid_comparison_group(session_old, session_new)
+    if not is_valid:
+        return {
+            "available": False,
+            "message": f"Could not find a valid comparable session pair ({invalid_reason}).",
+        }
 
     comparison = compare_sessions(session_old, session_new)
     messages = generate_progress_message(comparison)
@@ -276,8 +417,10 @@ def get_user_progress(db, user_id: int) -> dict:
             "date": s.created_at.isoformat() if s.created_at else None,
             "role": s.role,
             "difficulty": s.difficulty,
+            "interview_mode": s.interview_mode,
             "overall_score": s.overall_score,
             "confidence_level": summary.get("confidenceLevel", "NOT_AVAILABLE"),
+            "is_in_comparison_group": s in matched_sessions,
         })
 
     return {
@@ -287,6 +430,10 @@ def get_user_progress(db, user_id: int) -> dict:
         "focus_area": focus_area,
         "all_sessions": all_sessions,
         "total_completed_sessions": len(completed_sessions),
+        "comparison_group_role": best_key[0],
+        "comparison_group_difficulty": best_key[1],
+        "comparison_group_mode": best_key[2],
+        "comparison_group_size": len(matched_sessions),
     }
 
 

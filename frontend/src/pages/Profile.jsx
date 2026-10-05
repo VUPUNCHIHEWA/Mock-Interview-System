@@ -1,222 +1,227 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { 
-        User, Mail, GraduationCap, Briefcase, 
-        Save, Camera, 
-  CheckCircle2, ChevronRight 
-} from 'lucide-react';
-import { FaGithub, FaLinkedin } from 'react-icons/fa';
+import { User, Mail, GraduationCap, Link2, Save, Loader2, CheckCircle2 } from 'lucide-react';
+
+// --- BSc Research Feature: role options here MUST match the backend's
+// AVAILABLE_ROLES exactly (see question_bank.py) - previously this
+// dropdown offered role strings ("Fullstack Developer", "Data Science
+// Intern") that don't exist in the app's actual 4 supported roles,
+// meaning a saved profile role could never correctly match an
+// Interview Setup selection. Fixed to the exact 4 supported roles.
+const AVAILABLE_ROLES = ["Software Engineer", "QA Engineer", "Business Analyst", "UX/UI Designer"];
 
 const Profile = () => {
-    const userId = localStorage.getItem("userId");
-
-    const [user, setUser] = useState({
-        name: "",
+    const [profile, setProfile] = useState({
+        full_name: "",
         email: "",
         university: "",
         degree: "",
-        role: "Software Quality Assurance (QA) Intern",
+        role: "",
         github: "",
-        linkedin: ""
+        linkedin: "",
     });
+    const [loading, setLoading] = useState(true);
+    const [saving, setSaving] = useState(false);
+    const [saveSuccess, setSaveSuccess] = useState(false);
 
-    const [isSaving, setIsSaving] = useState(false);
+    const userId = localStorage.getItem("userId") || 1;
 
     useEffect(() => {
-        const loadProfile = async () => {
-            if (!userId) return;
-
-            try {
-                const response = await axios.get(`http://127.0.0.1:8000/profile/${userId}`);
-                const profile = response.data;
-
-                setUser((prev) => ({
-                    ...prev,
-                    name: profile.full_name || prev.name,
-                    email: profile.email || prev.email,
-                    university: profile.university || prev.university,
-                    degree: profile.degree || prev.degree,
-                    role: profile.role || prev.role,
-                    github: profile.github || prev.github,
-                    linkedin: profile.linkedin || prev.linkedin,
-                }));
-            } catch (error) {
-                console.error("Failed to load profile:", error);
-            }
-        };
-
-        loadProfile();
+        axios.get(`http://localhost:8000/profile/${userId}`)
+            .then(response => {
+                setProfile(prev => ({ ...prev, ...response.data }));
+                setLoading(false);
+            })
+            .catch(err => {
+                console.error("Failed to load profile:", err);
+                setLoading(false);
+            });
     }, [userId]);
 
+    const handleChange = (field, value) => {
+        setProfile(prev => ({ ...prev, [field]: value }));
+        setSaveSuccess(false);
+    };
+
     const handleSave = async () => {
-        if (!userId) {
-            alert("Please login first");
-            return;
-        }
-
-        setIsSaving(true);
-
+        setSaving(true);
+        setSaveSuccess(false);
         try {
-            await axios.post(`http://127.0.0.1:8000/profile/${userId}`, {
-                full_name: user.name,
-                email: user.email,
-                university: user.university,
-                degree: user.degree,
-                role: user.role,
-                github: user.github,
-                linkedin: user.linkedin,
-            });
-
-            alert("Profile Updated Successfully! ✅");
-        } catch (error) {
-            console.error("Profile save failed:", error);
-            alert(error.response?.data?.detail || "Failed to update profile");
+            await axios.put(`http://localhost:8000/profile/${userId}`, profile);
+            setSaveSuccess(true);
+        } catch (err) {
+            console.error("Failed to save profile:", err);
+            alert("Could not save profile changes.");
         } finally {
-            setIsSaving(false);
+            setSaving(false);
         }
     };
 
+    // --- BSc Research Feature (Bug fix): avatar initials are now
+    // generated dynamically from the user's actual full_name, instead
+    // of a hardcoded "VU" placeholder that showed for every user
+    // regardless of their real name.
+    const getInitials = (name) => {
+        if (!name || !name.trim()) return "?";
+        return name.trim().split(/\s+/).map(w => w[0]).join("").toUpperCase().slice(0, 2);
+    };
+
+    if (loading) {
+        return (
+            <div className="flex items-center justify-center min-h-[60vh]">
+                <Loader2 className="animate-spin text-blue-500" size={48} />
+            </div>
+        );
+    }
+
     return (
-        <div className="animate-in fade-in slide-in-from-bottom-6 duration-700 max-w-4xl mx-auto space-y-8 pb-10">
-            
-            {/* Header Area */}
-            <div className="flex justify-between items-end">
-                <div>
-                    <h1 className="text-3xl font-black text-slate-800">Profile Settings</h1>
-                    <p className="text-slate-400 font-medium">Manage your academic and professional information</p>
+        <div className="p-6 md:p-10 animate-in fade-in duration-500 max-w-3xl mx-auto space-y-8">
+
+            <h1 className="text-3xl font-black text-slate-900 tracking-tighter uppercase italic flex items-center gap-3">
+                <User className="text-blue-500" size={32} />
+                Profile
+            </h1>
+
+            {/* Avatar + Name Header */}
+            <div className="bg-white border border-slate-100 rounded-[2rem] p-8 shadow-sm flex items-center gap-6">
+                <div className="w-20 h-20 bg-blue-600 rounded-2xl flex items-center justify-center text-white text-2xl font-black shadow-lg shadow-blue-200 shrink-0">
+                    {getInitials(profile.full_name)}
                 </div>
-                <button 
-                    onClick={handleSave}
-                    disabled={isSaving}
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-2xl font-bold flex items-center gap-2 shadow-lg shadow-blue-200 transition-all active:scale-95 disabled:opacity-50"
-                >
-                    {isSaving ? "Saving..." : <><Save size={18} /> Save Changes</>}
-                </button>
+                <div>
+                    <h2 className="text-xl font-bold text-slate-800">{profile.full_name || "Unnamed User"}</h2>
+                    <p className="text-sm text-slate-400 font-medium">{profile.email || "No email set"}</p>
+                </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                
-                {/* Left Side: Avatar & Quick Info */}
-                <div className="space-y-6">
-                    <div className="bg-white p-8 rounded-[3rem] border border-slate-100 shadow-sm text-center relative overflow-hidden">
-                        <div className="absolute top-0 left-0 w-full h-24 bg-gradient-to-r from-blue-600 to-indigo-600"></div>
-                        
-                        <div className="relative mt-4">
-                            <div className="w-32 h-32 bg-slate-100 rounded-[2.5rem] mx-auto border-4 border-white shadow-xl flex items-center justify-center text-4xl font-black text-blue-600">
-                                VU
-                            </div>
-                            <button className="absolute bottom-0 right-1/4 bg-white p-2 rounded-xl shadow-md border border-slate-100 text-slate-600 hover:text-blue-600">
-                                <Camera size={16} />
-                            </button>
-                        </div>
+            {/* Personal Details */}
+            <div className="bg-white border border-slate-100 rounded-[2rem] p-8 shadow-sm space-y-5">
+                <h3 className="text-xs font-black uppercase tracking-widest text-slate-400 mb-2">Personal Details</h3>
 
-                        <div className="mt-6">
-                            <h3 className="text-xl font-black text-slate-800">{user.name}</h3>
-                            <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest mt-1">IT Undergraduate</p>
-                        </div>
-                    </div>
-
-                    <div className="bg-emerald-50 p-6 rounded-[2.5rem] border border-emerald-100">
-                        <div className="flex items-center gap-3 text-emerald-700 mb-2">
-                            <CheckCircle2 size={18} />
-                            <span className="font-black text-xs uppercase tracking-widest">Verification</span>
-                        </div>
-                        <p className="text-emerald-600/80 text-xs font-medium leading-relaxed">
-                            Your academic records from KDU are synced and verified.
-                        </p>
-                    </div>
+                <div>
+                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Full Name</label>
+                    <input
+                        type="text"
+                        value={profile.full_name}
+                        onChange={(e) => handleChange('full_name', e.target.value)}
+                        placeholder="Enter your full name"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 outline-none focus:border-blue-500"
+                    />
                 </div>
 
-                {/* Right Side: Editable Form */}
-                <div className="md:col-span-2 space-y-6">
-                    <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-sm space-y-8">
-                        
-                        {/* Personal Info Section */}
-                        <div className="space-y-6">
-                            <h4 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] flex items-center gap-2">
-                                <User size={14} /> Personal Information
-                            </h4>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <div className="space-y-2">
-                                    <label className="text-xs font-bold text-slate-500 ml-1">Full Name</label>
-                                    <input 
-                                        type="text" 
-                                        value={user.name}
-                                        onChange={(e) => setUser({...user, name: e.target.value})}
-                                        className="w-full bg-slate-50 border border-slate-100 p-4 rounded-2xl text-sm font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
-                                    />
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-xs font-bold text-slate-500 ml-1">Email Address</label>
-                                    <input 
-                                        type="email" 
-                                        value={user.email}
-                                        className="w-full bg-slate-50 border border-slate-100 p-4 rounded-2xl text-sm font-bold opacity-60 cursor-not-allowed"
-                                        disabled
-                                    />
-                                </div>
-                            </div>
-                        </div>
+                <div>
+                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block flex items-center gap-1.5">
+                        <Mail size={12} /> Email
+                    </label>
+                    <input
+                        type="email"
+                        value={profile.email}
+                        onChange={(e) => handleChange('email', e.target.value)}
+                        placeholder="you@example.com"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 outline-none focus:border-blue-500"
+                    />
+                </div>
+            </div>
 
-                        {/* Academic Info Section */}
-                        <div className="space-y-6 pt-4 border-t border-slate-50">
-                            <h4 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] flex items-center gap-2">
-                                <Briefcase size={14} /> Academic & Career
-                            </h4>
-                            <div className="space-y-4">
-                                <div className="flex gap-4 items-center bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                                    <div className="bg-white p-2 rounded-xl shadow-sm text-blue-600"><GraduationCap size={20}/></div>
-                                    <div className="flex-1">
-                                        <p className="text-[10px] font-black text-slate-400 uppercase">University</p>
-                                        <p className="text-sm font-bold text-slate-800">KDU Sri Lanka</p>
-                                    </div>
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-xs font-bold text-slate-500 ml-1">Target Internship Role</label>
-                                    <select 
-                                        value={user.role}
-                                        onChange={(e) => setUser({...user, role: e.target.value})}
-                                        className="w-full bg-slate-50 border border-slate-100 p-4 rounded-2xl text-sm font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition-all appearance-none"
-                                    >
-                                        <option>Software Quality Assurance (QA) Intern</option>
-                                        <option>Software Engineering Intern</option>
-                                        <option>Fullstack Developer</option>
-                                        <option>Data Science Intern</option>
-                                    </select>
-                                </div>
-                            </div>
-                        </div>
+            {/* Academic Details */}
+            <div className="bg-white border border-slate-100 rounded-[2rem] p-8 shadow-sm space-y-5">
+                <h3 className="text-xs font-black uppercase tracking-widest text-slate-400 mb-2 flex items-center gap-2">
+                    <GraduationCap size={14} /> Academic Details
+                </h3>
 
-                        {/* Social Connections */}
-                        <div className="space-y-6 pt-4 border-t border-slate-50">
-                            <h4 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] flex items-center gap-2">
-                                <FaGithub size={14} /> Social Profiles
-                            </h4>
-                            <div className="grid grid-cols-1 gap-4">
-                                <div className="flex items-center gap-3 bg-slate-900 text-white p-4 rounded-2xl border border-slate-800">
-                                    <FaGithub size={20} />
-                                    <input 
-                                        type="text" 
-                                        value={user.github}
-                                        onChange={(e) => setUser({...user, github: e.target.value})}
-                                        className="bg-transparent border-none p-0 text-sm font-bold focus:ring-0 w-full"
-                                    />
-                                </div>
-                                <div className="flex items-center gap-3 bg-[#0077B5] text-white p-4 rounded-2xl">
-                                    <FaLinkedin size={20} />
-                                    <input 
-                                        type="text" 
-                                        value={user.linkedin}
-                                            onChange={(e) => setUser({...user, linkedin: e.target.value})}
-                                        className="bg-transparent border-none p-0 text-sm font-bold focus:ring-0 w-full"
-                                    />
-                                </div>
-                            </div>
-                        </div>
-
-                    </div>
+                {/* --- BSc Research Feature (Bug fix): university is now an
+                    editable field showing the user's ACTUAL saved value,
+                    instead of a hardcoded "KDU Sri Lanka" string shown for
+                    every user regardless of their real university. The
+                    previous fake "verified/synced" message (implying an
+                    academic-records verification process that doesn't
+                    exist) has also been removed. */}
+                <div>
+                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">University</label>
+                    <input
+                        type="text"
+                        value={profile.university}
+                        onChange={(e) => handleChange('university', e.target.value)}
+                        placeholder="Enter your university"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 outline-none focus:border-blue-500"
+                    />
                 </div>
 
+                <div>
+                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Degree Programme</label>
+                    <input
+                        type="text"
+                        value={profile.degree}
+                        onChange={(e) => handleChange('degree', e.target.value)}
+                        placeholder="e.g. BSc (Hons) Information Technology"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 outline-none focus:border-blue-500"
+                    />
+                </div>
+
+                {/* --- BSc Research Feature (Bug fix): options now exactly
+                    match the backend's AVAILABLE_ROLES (question_bank.py),
+                    so a saved profile role is guaranteed to correctly match
+                    the roles offered in Interview Setup. */}
+                <div>
+                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Target Role</label>
+                    <select
+                        value={profile.role}
+                        onChange={(e) => handleChange('role', e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 outline-none focus:border-blue-500"
+                    >
+                        <option value="">Select a role</option>
+                        {AVAILABLE_ROLES.map(role => (
+                            <option key={role} value={role}>{role}</option>
+                        ))}
+                    </select>
+                </div>
+            </div>
+
+            {/* Links */}
+            <div className="bg-white border border-slate-100 rounded-[2rem] p-8 shadow-sm space-y-5">
+                <h3 className="text-xs font-black uppercase tracking-widest text-slate-400 mb-2">Professional Links</h3>
+
+                <div>
+                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block flex items-center gap-1.5">
+                        <Link2 size={12} /> GitHub Username
+                    </label>
+                    <input
+                        type="text"
+                        value={profile.github}
+                        onChange={(e) => handleChange('github', e.target.value)}
+                        placeholder="your-github-username"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 outline-none focus:border-blue-500"
+                    />
+                </div>
+
+                <div>
+                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block flex items-center gap-1.5">
+                        <Link2 size={12} /> LinkedIn Profile URL
+                    </label>
+                    <input
+                        type="text"
+                        value={profile.linkedin}
+                        onChange={(e) => handleChange('linkedin', e.target.value)}
+                        placeholder="https://linkedin.com/in/your-profile"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 outline-none focus:border-blue-500"
+                    />
+                </div>
+            </div>
+
+            {/* Save Button */}
+            <div className="flex items-center gap-4">
+                <button
+                    onClick={handleSave}
+                    disabled={saving}
+                    className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
+                >
+                    {saving ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
+                    {saving ? "Saving..." : "Save Changes"}
+                </button>
+                {saveSuccess && (
+                    <span className="flex items-center gap-1.5 text-green-600 text-sm font-bold">
+                        <CheckCircle2 size={16} /> Saved!
+                    </span>
+                )}
             </div>
         </div>
     );

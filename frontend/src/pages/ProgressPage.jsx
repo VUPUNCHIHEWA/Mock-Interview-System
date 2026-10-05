@@ -1,20 +1,59 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { LayoutDashboard, TrendingUp, TrendingDown, Minus, Loader2, AlertCircle, AlertTriangle, Rocket, Calendar } from 'lucide-react';
+import { LayoutDashboard, TrendingUp, TrendingDown, Minus, Loader2, AlertCircle, Rocket, Calendar, SlidersHorizontal } from 'lucide-react';
 
 // --- BSc Research Feature (Step 5): ⭐ Progress Tracker page - core
 // research contribution UI, displays the comparison between a user's
 // earliest and most recent completed sessions (see progress_tracker.py).
+//
+// --- BSc Research Feature (User-Selectable Comparison): the student
+// now explicitly selects which role/difficulty/interview-mode
+// combination to view progress for, via 3 dropdowns populated only
+// with combinations that actually have 2+ comparable sessions - giving
+// full transparency and control over exactly what is being compared,
+// rather than a black-box auto-selected group.
 const ProgressPage = () => {
     const navigate = useNavigate();
+    const [options, setOptions] = useState([]);
+    const [optionsLoading, setOptionsLoading] = useState(true);
+    const [selectedKey, setSelectedKey] = useState(null); // "role|difficulty|mode" string
     const [progress, setProgress] = useState(null);
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
 
+    const userId = localStorage.getItem("userId") || 1;
+
+    // Step 1: fetch available comparison options (populates dropdown)
     useEffect(() => {
-        const userId = localStorage.getItem("userId") || 1;
-        axios.get(`http://localhost:8000/api/progress/${userId}`)
+        axios.get(`http://localhost:8000/api/progress-options/${userId}`)
+            .then(response => {
+                const opts = response.data.options || [];
+                setOptions(opts);
+                setOptionsLoading(false);
+                // Auto-select the first (most-data-rich) option by default,
+                // so the page isn't empty on first load - student can still
+                // change the selection afterward.
+                if (opts.length > 0) {
+                    const first = opts[0];
+                    setSelectedKey(`${first.role}|${first.difficulty}|${first.interview_mode}`);
+                }
+            })
+            .catch(err => {
+                console.error("Failed to fetch progress options:", err);
+                setOptionsLoading(false);
+            });
+    }, []);
+
+    // Step 2: whenever the selection changes, fetch progress for that combination
+    useEffect(() => {
+        if (!selectedKey) return;
+        const [role, difficulty, mode] = selectedKey.split('|');
+        setLoading(true);
+        setError(null);
+        axios.get(`http://localhost:8000/api/progress/${userId}`, {
+            params: { role, difficulty, mode }
+        })
             .then(response => {
                 setProgress(response.data);
                 setLoading(false);
@@ -24,7 +63,7 @@ const ProgressPage = () => {
                 setError("Could not load progress data.");
                 setLoading(false);
             });
-    }, []);
+    }, [selectedKey]);
 
     const getTrendIcon = (trend) => {
         if (trend === "Improved") return <TrendingUp className="text-green-500" size={20} />;
@@ -54,8 +93,50 @@ const ProgressPage = () => {
 
                 <div className="text-center mb-8">
                     <h1 className="text-4xl font-black text-slate-900 tracking-tighter uppercase italic">Your Progress</h1>
-                    <p className="text-slate-500 mt-2 font-medium">Comparing your first and most recent completed sessions.</p>
+                    <p className="text-slate-500 mt-2 font-medium">Select a role, difficulty, and mode combination to compare your sessions.</p>
                 </div>
+
+                {/* --- BSc Research Feature (User-Selectable Comparison):
+                    dropdown populated ONLY with combinations that have 2+
+                    comparable sessions - the student cannot select an
+                    invalid/incomparable combination. */}
+                {!optionsLoading && options.length > 0 && (
+                    <div className="bg-white border border-slate-100 rounded-[2rem] p-6 shadow-sm">
+                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3 flex items-center gap-2">
+                            <SlidersHorizontal size={14} /> Compare Sessions For:
+                        </p>
+                        <select
+                            value={selectedKey || ''}
+                            onChange={(e) => setSelectedKey(e.target.value)}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-700 outline-none focus:border-blue-500"
+                        >
+                            {options.map((opt) => {
+                                const key = `${opt.role}|${opt.difficulty}|${opt.interview_mode}`;
+                                return (
+                                    <option key={key} value={key}>
+                                        {opt.role} · {opt.difficulty} · {opt.interview_mode} ({opt.session_count} sessions)
+                                    </option>
+                                );
+                            })}
+                        </select>
+                    </div>
+                )}
+
+                {!optionsLoading && options.length === 0 && (
+                    <div className="bg-white border border-slate-100 rounded-[2rem] p-10 shadow-sm text-center">
+                        <AlertCircle className="mx-auto text-slate-400 mb-4" size={40} />
+                        <p className="text-slate-600 font-medium mb-6">
+                            No comparable session pairs yet. Complete 2 sessions with the SAME role, difficulty, and
+                            interview mode to unlock progress tracking.
+                        </p>
+                        <button
+                            onClick={() => navigate('/InterviewSetup')}
+                            className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all active:scale-95"
+                        >
+                            <Rocket size={16} /> Start Another Session
+                        </button>
+                    </div>
+                )}
 
                 {loading && (
                     <div className="flex flex-col items-center justify-center py-20">
@@ -88,19 +169,6 @@ const ProgressPage = () => {
 
                 {!loading && !error && progress && progress.available && (
                     <div className="space-y-6">
-
-                        {/* BSc Research Feature (Suggestion #2): role/difficulty
-                            consistency warning - shown prominently before any
-                            score interpretation, since a mismatched comparison
-                            (different role/difficulty) is not directly valid. */}
-                        {progress.comparison.context_warning && (
-                            <div className="bg-orange-50 border border-orange-200 rounded-2xl p-5 flex gap-3 items-start">
-                                <AlertTriangle className="text-orange-500 shrink-0 mt-0.5" size={20} />
-                                <p className="text-sm text-orange-800 font-medium leading-relaxed">
-                                    {progress.comparison.context_warning}
-                                </p>
-                            </div>
-                        )}
 
                         {/* Focus Area */}
                         {progress.focus_area && (

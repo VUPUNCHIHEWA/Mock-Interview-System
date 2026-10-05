@@ -2,7 +2,7 @@ import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { CircularProgressbar, buildStyles } from 'react-circular-progressbar';
 import 'react-circular-progressbar/dist/styles.css';
-import { LayoutDashboard, Target, CheckCircle, TrendingUp, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import { LayoutDashboard, Target, CheckCircle, TrendingUp, AlertCircle, ChevronDown, ChevronUp, GraduationCap, ExternalLink, ClipboardCheck } from 'lucide-react';
 import { useState } from 'react';
 
 const InterviewResults = () => {
@@ -27,7 +27,7 @@ const InterviewResults = () => {
         );
     }
 
-    const { overallScore, overallStrengths, keyImprovements, evaluations, interviewMode, confidenceLevel } = results;
+    const { overallScore, overallStrengths, keyImprovements, evaluations, interviewMode, confidenceLevel, recommendedResources } = results;
 
     // --- BSc Research Feature (Suggestion #2/#4): session context
     // (role/difficulty/date) - shown in the header for quick reference
@@ -190,6 +190,54 @@ const InterviewResults = () => {
                                     : <li>{keyImprovements}</li>}
                             </ul>
                         </div>
+
+                        {/* --- BSc Research Feature: Career Guidance Suggestions
+                            (Supporting Feature, NOT a core research contribution).
+                            Only shown when the content/textual score indicates a
+                            genuine knowledge gap - see career_resources.py for
+                            full scope disclosure. */}
+                        {recommendedResources && recommendedResources.triggered && (
+                            <div className="bg-indigo-50/60 p-8 rounded-[2rem] border border-indigo-100 shadow-sm">
+                                <div className="flex items-center gap-3 mb-3">
+                                    <GraduationCap className="text-indigo-500" size={24} />
+                                    <h3 className="text-sm font-black uppercase tracking-widest text-slate-800">Recommended Learning Resources</h3>
+                                </div>
+                                <p className="text-xs text-indigo-800/80 font-medium mb-4">{recommendedResources.reason}</p>
+                                <ul className="space-y-2">
+                                    {recommendedResources.resources.map((res, i) => (
+                                        <li key={i}>
+                                            <a
+                                                href={res.link}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="flex items-center justify-between bg-white p-3 rounded-xl border border-indigo-100 hover:border-indigo-300 transition-colors group"
+                                            >
+                                                <div>
+                                                    <p className="text-sm font-bold text-slate-700">{res.name}</p>
+                                                    <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest">{res.type}</p>
+                                                </div>
+                                                <ExternalLink size={14} className="text-slate-300 group-hover:text-indigo-500 transition-colors shrink-0" />
+                                            </a>
+                                        </li>
+                                    ))}
+                                </ul>
+
+                                {/* --- BSc Research Feature: Practice Quiz link -
+                                    only shown for QA Engineer, matching the
+                                    currently-authored quiz content (see
+                                    istqb_quiz.py). Extending to other roles
+                                    would require authoring role-specific
+                                    question sets first. */}
+                                {sessionRole === 'QA Engineer' && (
+                                    <button
+                                        onClick={() => navigate('/istqb-quiz')}
+                                        className="w-full mt-4 flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white py-3 rounded-xl font-black text-xs uppercase tracking-widest transition-all active:scale-95"
+                                    >
+                                        <ClipboardCheck size={16} /> Practice Quiz — Test Your Knowledge
+                                    </button>
+                                )}
+                            </div>
+                        )}
                     </div>
                 </div>
 

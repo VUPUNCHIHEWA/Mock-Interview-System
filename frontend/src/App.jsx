@@ -17,6 +17,8 @@ import InterviewSession from './pages/InterviewSession';
 import InterviewResults from './pages/InterviewResults';
 import Profile from './pages/Profile';
 import ProgressPage from './pages/ProgressPage';
+import ISTQBQuizPage from './pages/ISTQBQuizPage';
+
 const MainLayout = ({ children }) => (
   <div className="flex min-h-screen bg-transparent text-slate-900">
     <Sidebar />
@@ -51,6 +53,7 @@ function App() {
         <Route path="/interview-session" element={<InterviewSession />} />
         <Route path="/interview-results" element={<MainLayout><InterviewResults /></MainLayout>} />
         <Route path="/progress" element={<MainLayout><ProgressPage /></MainLayout>} />
+        <Route path="/istqb-quiz" element={<MainLayout><ISTQBQuizPage /></MainLayout>} />
 
       </Routes>
     </BrowserRouter>

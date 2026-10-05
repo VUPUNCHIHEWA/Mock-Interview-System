@@ -16,7 +16,8 @@ except Exception:
     mp = None
     mp_face_detection = None
 from app.services.interview_service import continue_interview_session, start_interview_session, end_interview_session
-from app.services.progress_tracker import get_user_progress
+from app.services.progress_tracker import get_user_progress, get_comparison_options
+from app.services.istqb_quiz import get_quiz_questions, grade_quiz
 
 router = APIRouter()
 
@@ -138,14 +139,26 @@ async def end_interview(data: dict, db: Session = Depends(get_db)):
 async def get_interview_history(user_id: int, db: Session = Depends(get_db)):
     sessions = db.query(InterviewSession).filter(InterviewSession.user_id == user_id).order_by(InterviewSession.created_at.desc()).all()
     
+    import json
     history = []
     for s in sessions:
+        # --- BSc Research Feature: extract confidenceLevel from
+        # summary_feedback so the History list can show the AI-Predicted
+        # Confidence badge without requiring a separate detail-page visit.
+        confidence_level = "NOT_AVAILABLE"
+        if s.summary_feedback:
+            try:
+                confidence_level = json.loads(s.summary_feedback).get("confidenceLevel", "NOT_AVAILABLE")
+            except (json.JSONDecodeError, TypeError):
+                pass
+
         history.append({
             "sessionId": s.session_id,
             "role": s.role,
             "difficulty": s.difficulty,
             "interviewMode": s.interview_mode,
             "overallScore": s.overall_score,
+            "confidenceLevel": confidence_level,
             "status": s.status,
             "createdAt": s.created_at
         })
@@ -243,14 +256,67 @@ async def delete_interview_session(session_id: str, db: Session = Depends(get_db
 
 
 # --- BSc Research Feature (Step 5): ⭐ Progress Tracker endpoint - core
-# research contribution, compares a user's earliest and most recent
-# completed sessions (see progress_tracker.py for the comparison logic
-# and literature citations).
+# research contribution, compares a user's sessions within a specific
+# role+difficulty+interview_mode combination (see progress_tracker.py
+# for the comparability-validation logic and literature citations).
+#
+# --- BSc Research Feature (User-Selectable Comparison): the student
+# can now explicitly choose which role/difficulty/mode combination to
+# view via optional query parameters (?role=X&difficulty=Y&mode=Z). If
+# omitted, the system falls back to auto-selecting the largest valid
+# group (backward-compatible default behavior).
 @router.get("/api/progress/{user_id}")
-async def get_progress(user_id: int, db: Session = Depends(get_db)):
+async def get_progress(
+    user_id: int,
+    role: Optional[str] = None,
+    difficulty: Optional[str] = None,
+    mode: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
     try:
-        result = get_user_progress(db, user_id)
+        result = get_user_progress(db, user_id, role=role, difficulty=difficulty, interview_mode=mode)
         return {"success": True, **result}
     except Exception as e:
         print(f"❌ Error in get-progress: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# --- BSc Research Feature: returns the list of role/difficulty/mode
+# combinations this user has 2+ completed sessions for - used to
+# populate the frontend's selection dropdowns with only valid,
+# comparable options (rather than letting the student pick a
+# combination with insufficient data).
+@router.get("/api/progress-options/{user_id}")
+async def get_progress_options(user_id: int, db: Session = Depends(get_db)):
+    try:
+        result = get_comparison_options(db, user_id)
+        return {"success": True, **result}
+    except Exception as e:
+        print(f"❌ Error in get-progress-options: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# --- BSc Research Feature: QA Career-Prep Practice Quiz (Supporting
+# Feature, extension of Career Guidance Suggestions - see
+# istqb_quiz.py for full scope/copyright disclosure). Original,
+# researcher-authored MCQ questions covering ISTQB Foundation syllabus
+# TOPIC AREAS - not copied from any copyrighted ISTQB exam material.
+@router.get("/api/istqb-quiz")
+async def get_istqb_quiz():
+    try:
+        questions = get_quiz_questions()
+        return {"success": True, "questions": questions}
+    except Exception as e:
+        print(f"❌ Error in get-istqb-quiz: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/api/istqb-quiz/submit")
+async def submit_istqb_quiz(data: dict):
+    try:
+        answers = data.get("answers", {})
+        result = grade_quiz(answers)
+        return {"success": True, **result}
+    except Exception as e:
+        print(f"❌ Error in submit-istqb-quiz: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))

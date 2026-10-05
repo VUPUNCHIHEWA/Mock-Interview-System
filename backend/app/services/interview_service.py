@@ -8,6 +8,7 @@ from app.models import InterviewSession, InterviewResponse
 from app.services.question_bank import get_next_question, AVAILABLE_ROLES
 from app.services.voice_analysis import analyze_voice, compute_session_vocal_score
 from app.services.ml_model import predict_confidence_level
+from app.services.career_resources import get_recommended_resources
 
 # NOTE (BSc Research Feature - Step 1): Question generation is now handled
 # by the static, literature-curated question_bank module instead of Gemini.
@@ -493,6 +494,14 @@ async def end_interview_session(data: dict, client=None, db=None):
     session.summary_feedback = json.dumps(summary_dict)
     
     db.commit()
+
+    # --- BSc Research Feature: Career Guidance Suggestions (Supporting
+    # Feature, NOT a core research contribution - see career_resources.py
+    # docstring for full scope disclosure). Only triggers when the
+    # content/textual score indicates a genuine knowledge gap; behavioral
+    # weaknesses (visual/vocal) already have actionable tips via the
+    # Progress Tracker's Focus Area feature.
+    recommended_resources = get_recommended_resources(session.role, textual_score)
     
     return {
         "success": True,
@@ -505,10 +514,8 @@ async def end_interview_session(data: dict, client=None, db=None):
         "textualScore": textual_score,
         "visualScore": final_visual,
         "vocalScore": final_vocal,
-        # --- BSc Research Feature (Function 5, Suggestion #2/#4):
-        # session context for the Interview Results page header
-        # (role/difficulty badges, session date).
         "role": session.role,
         "difficulty": session.difficulty,
         "createdAt": session.created_at.isoformat() if session.created_at else None,
+        "recommendedResources": recommended_resources,
     }
