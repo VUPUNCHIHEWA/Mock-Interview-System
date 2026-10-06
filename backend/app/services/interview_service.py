@@ -1,4 +1,5 @@
 import json
+import math
 import time
 import re
 import traceback
@@ -28,6 +29,26 @@ def clean_json_response(text: str) -> dict:
     except Exception as e:
         print(f"⚠️ JSON Parsing failed for text: {text} | Error: {e}")
         return {}
+
+
+def _parse_score(raw):
+    """
+    Turns a score (the camera confidence sent by the browser, or the score
+    Gemini returns) into a number between 0 and 100, or None when there is
+    no real value.
+
+    Returns None (never a made-up default) for: missing, empty text,
+    "null", "nan", or anything that is not a number. A genuine 0 stays 0.
+    """
+    if raw is None:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(value) or math.isinf(value):
+        return None
+    return max(0.0, min(100.0, value))
 
 
 async def start_interview_session(data: dict, client=None, db=None):
@@ -137,6 +158,11 @@ async def continue_interview_session(data: dict, client=None, db=None):
         except Exception as e:
             print(f"❌ Audio processing error: {e}")
 
+    # Real visual score only. None means "no valid camera reading" - it is
+    # NOT replaced by a default (a missing measurement must never look like
+    # a good one).
+    vci = _parse_score(data.get("visualConfidenceScore"))
+
     last_response = db.query(InterviewResponse).filter(
         InterviewResponse.session_id == session_id
     ).order_by(InterviewResponse.id.desc()).first()
@@ -163,17 +189,29 @@ async def continue_interview_session(data: dict, client=None, db=None):
                 last_response.long_pause_count = voice_metrics["long_pause_count"]
                 last_response.pitch_variation = voice_metrics["pitch_variation"]
 
-            vci = data.get("visualConfidenceScore")
             if vci is not None:
-                try:
-                    last_response.visual_confidence_score = float(vci)
-                except ValueError:
-                    pass
-                    
+                last_response.visual_confidence_score = vci
+
             db.commit()
 
-    vci = data.get("visualConfidenceScore") or 80.0
-    vocal_context = "Clear and articulate" if audio_path else "Text-only response"
+    # What we tell Gemini about delivery must be real measurements only.
+    if vci is not None:
+        visual_line = f"{vci:.1f}/100"
+    else:
+        visual_line = "not available (no valid camera reading for this answer)"
+
+    if voice_metrics:
+        pitch = voice_metrics.get("pitch_variation")
+        pitch_text = f"{pitch:.1f}" if isinstance(pitch, (int, float)) else "not available"
+        vocal_context = (
+            f"Measured from audio: {voice_metrics.get('filler_word_count')} filler words, "
+            f"{voice_metrics.get('long_pause_count')} long pauses (over 3 seconds), "
+            f"pitch variation {pitch_text}"
+        )
+    elif audio_path:
+        vocal_context = "not available (audio was recorded but could not be analysed)"
+    else:
+        vocal_context = "not available (text-only response)"
 
     if session.interview_mode and session.interview_mode.upper() == "TEXT":
         dynamic_prompt = f"""
@@ -199,13 +237,14 @@ async def continue_interview_session(data: dict, client=None, db=None):
     
     Question Asked: "{last_question}"
     Candidate's Answer (Text/Transcribed): "{user_message}"
-    Visual Confidence Score (from camera analysis): {vci}/100
+    Visual Confidence Score (from camera analysis): {visual_line}
     Vocal Delivery Context: {vocal_context}
 
     Tasks:
     1. Evaluate the candidate's answer for technical accuracy, clarity, and depth (Textual Score).
     2. Integrate the Textual Score with the provided Visual Confidence Score and Vocal Delivery to calculate an OVERALL integrated score (0-100). 
        - Weighting suggestion: 60% Textual (Logical value), 20% Visual, 20% Vocal.
+       - If the Visual Confidence Score or Vocal Delivery is marked "not available", do NOT guess or invent it - base the score only on the information that IS available.
        - NOTE (BSc Research): this 60/20/20 weighting is an
          ASSUMPTION - not literature-derived - carried over from the
          original implementation. See RESEARCH_DOCUMENTATION.md for the
@@ -220,9 +259,12 @@ async def continue_interview_session(data: dict, client=None, db=None):
     Do NOT add any intro, outro, or additional text outside the JSON object.
     """
 
+    # No real evaluation yet. The score stays None (NOT a made-up number such
+    # as 75) until Gemini returns a valid one. A None score is shown to the
+    # student as "Not Evaluated" and is left out of the averages.
     default_eval = {
-        "score": 75,
-        "feedback": "Answer recorded successfully. Try providing deeper implementation details.",
+        "score": None,
+        "feedback": "Your answer was recorded, but it could not be evaluated automatically this time.",
     }
 
     # Skip questions never call Gemini - there is no real answer to
@@ -247,11 +289,15 @@ async def continue_interview_session(data: dict, client=None, db=None):
             if response and response.text:
                 print("📥 Raw Gemini Evaluation Response:", response.text)
                 parsed_json = clean_json_response(response.text)
-                if parsed_json and "score" in parsed_json:
-                    default_eval = parsed_json
+                gemini_score = _parse_score(parsed_json.get("score")) if isinstance(parsed_json, dict) else None
+                if gemini_score is not None:
+                    default_eval = {
+                        "score": gemini_score,
+                        "feedback": parsed_json.get("feedback") or "",
+                    }
                     print(f"✅ Gemini Evaluation Success: Score={default_eval.get('score')}")
                 else:
-                    print("⚠️ JSON parsed but missing expected keys.")
+                    print("⚠️ Gemini response had no valid score - answer left as Not Evaluated.")
         except Exception as e:
             error_msg = str(e).lower()
             print(f"❌ Gemini Error during chat-interview: {str(e)}")
@@ -264,7 +310,7 @@ async def continue_interview_session(data: dict, client=None, db=None):
                 }
 
     if last_response and last_response.score is None:
-        last_response.score = default_eval.get("score", 75)
+        last_response.score = default_eval.get("score")
         last_response.feedback = default_eval.get("feedback", "")
         db.commit()
 
@@ -281,7 +327,7 @@ async def continue_interview_session(data: dict, client=None, db=None):
             "nextQuestion": None,
             "sessionComplete": True,
             "evaluation": {
-                "score": default_eval.get("score", 75),
+                "score": default_eval.get("score"),
                 "feedback": default_eval.get("feedback", ""),
             },
         }
@@ -304,7 +350,7 @@ async def continue_interview_session(data: dict, client=None, db=None):
         "sessionComplete": False,
         "isLastQuestion": session_complete_after_this,
         "evaluation": {
-            "score": default_eval.get("score", 75),
+            "score": default_eval.get("score"),
             "feedback": default_eval.get("feedback", ""),
         },
     }

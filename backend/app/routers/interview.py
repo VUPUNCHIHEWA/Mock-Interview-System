@@ -2,8 +2,8 @@ from typing import Optional
 from fastapi import APIRouter, File, Form, UploadFile, Request, Depends, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from app.core.dependencies import get_db
-from app.models import InterviewSession, InterviewResponse, VisualMetric
+from app.core.dependencies import get_db, get_current_user, ensure_same_user, get_owned_session
+from app.models import User, InterviewSession, InterviewResponse, VisualMetric
 from app.core.config import gemini_client
 import base64
 import numpy as np
@@ -23,8 +23,12 @@ router = APIRouter()
 
 
 @router.post("/api/start-interview")
-async def start_interview(data: dict, db: Session = Depends(get_db)):
+async def start_interview(data: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     print(f"📥 Received payload for start-interview: {data}")
+    # SECURITY: the owner of the session is always the logged-in user (from
+    # the token), never whatever userId the client claims in the request body.
+    data["userId"] = current_user.id
+    data.pop("user_id", None)
     try:
         return await start_interview_session(data, gemini_client, db)
     except Exception as e:
@@ -38,7 +42,8 @@ async def chat_interview(
     sessionId: Optional[str] = Form(None),
     message: Optional[str] = Form(None),
     audio_file: Optional[UploadFile] = File(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     
     content_type = request.headers.get("content-type", "")
@@ -56,6 +61,10 @@ async def chat_interview(
         }
 
     
+    # SECURITY: only the owner of the session may answer in it.
+    if payload.get("sessionId"):
+        get_owned_session(db, payload["sessionId"], current_user)
+
     if audio_file:
         audio_content = await audio_file.read()
         payload["audio_content"] = audio_content
@@ -66,7 +75,7 @@ async def chat_interview(
 from app.services.visual_analysis import analyze_frame
 
 @router.post("/api/analyze-visual")
-async def analyze_visual(data: dict, db: Session = Depends(get_db)):
+async def analyze_visual(data: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     session_id = data.get("sessionId")
     # The frontend payload might use "image_base64" or "frame"
     frame_b64 = data.get("image_base64") or data.get("frame")
@@ -74,9 +83,9 @@ async def analyze_visual(data: dict, db: Session = Depends(get_db)):
     if not session_id or not frame_b64:
         return {"status": "ERROR", "warning_message": "No sessionId or frame provided"}
         
-    session = db.query(InterviewSession).filter(InterviewSession.session_id == session_id).first()
+    session = get_owned_session(db, session_id, current_user)
     
-    if session and session.interview_mode == "TEXT":
+    if session.interview_mode == "TEXT":
         return {"status": "SKIPPED", "warning_message": "TEXT mode active, skipping visual analysis"}
         
     try:
@@ -110,17 +119,14 @@ async def analyze_visual(data: dict, db: Session = Depends(get_db)):
         }
 
 @router.get("/api/audio-file/{response_id}")
-async def get_audio_file(response_id: int, user_id: int, db: Session = Depends(get_db)):
+async def get_audio_file(response_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     response_record = db.query(InterviewResponse).filter(InterviewResponse.id == response_id).first()
     if not response_record:
         raise HTTPException(status_code=404, detail="Response not found")
         
-    session = db.query(InterviewSession).filter(InterviewSession.session_id == response_record.session_id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-        
-    if session.user_id != user_id:
-        raise HTTPException(status_code=403, detail="Unauthorized access to this audio file")
+    # SECURITY: ownership is checked against the logged-in user (token),
+    # not against a user_id the caller supplies.
+    get_owned_session(db, response_record.session_id, current_user)
         
     if not response_record.audio_path:
         raise HTTPException(status_code=404, detail="No audio file associated with this response")
@@ -132,11 +138,13 @@ async def get_audio_file(response_id: int, user_id: int, db: Session = Depends(g
     return FileResponse(response_record.audio_path, media_type="audio/webm")
 
 @router.post("/api/end-interview")
-async def end_interview(data: dict, db: Session = Depends(get_db)):
+async def end_interview(data: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    get_owned_session(db, data.get("sessionId"), current_user)
     return await end_interview_session(data, gemini_client, db)
 
 @router.get("/api/interview-history/{user_id}")
-async def get_interview_history(user_id: int, db: Session = Depends(get_db)):
+async def get_interview_history(user_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_same_user(user_id, current_user)
     sessions = db.query(InterviewSession).filter(InterviewSession.user_id == user_id).order_by(InterviewSession.created_at.desc()).all()
     
     import json
@@ -165,10 +173,8 @@ async def get_interview_history(user_id: int, db: Session = Depends(get_db)):
     return {"success": True, "history": history}
 
 @router.get("/api/interview-session/{session_id}")
-async def get_interview_session_details(session_id: str, db: Session = Depends(get_db)):
-    session = db.query(InterviewSession).filter(InterviewSession.session_id == session_id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+async def get_interview_session_details(session_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    session = get_owned_session(db, session_id, current_user)
         
     responses = db.query(InterviewResponse).filter(
         InterviewResponse.session_id == session_id,
@@ -244,10 +250,8 @@ async def get_interview_session_details(session_id: str, db: Session = Depends(g
     }
 
 @router.delete("/api/interview-session/{session_id}")
-async def delete_interview_session(session_id: str, db: Session = Depends(get_db)):
-    session = db.query(InterviewSession).filter(InterviewSession.session_id == session_id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+async def delete_interview_session(session_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    session = get_owned_session(db, session_id, current_user)
         
     db.delete(session)
     db.commit()
@@ -271,8 +275,10 @@ async def get_progress(
     role: Optional[str] = None,
     difficulty: Optional[str] = None,
     mode: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
+    ensure_same_user(user_id, current_user)
     try:
         result = get_user_progress(db, user_id, role=role, difficulty=difficulty, interview_mode=mode)
         return {"success": True, **result}
@@ -287,7 +293,8 @@ async def get_progress(
 # comparable options (rather than letting the student pick a
 # combination with insufficient data).
 @router.get("/api/progress-options/{user_id}")
-async def get_progress_options(user_id: int, db: Session = Depends(get_db)):
+async def get_progress_options(user_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_same_user(user_id, current_user)
     try:
         result = get_comparison_options(db, user_id)
         return {"success": True, **result}
