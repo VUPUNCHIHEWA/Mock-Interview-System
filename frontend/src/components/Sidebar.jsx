@@ -55,7 +55,13 @@ const Sidebar = () => {
                     <p className="mt-2 text-sm font-semibold text-white">Keep your momentum going.</p>
                 </div>
                 <button
-                    onClick={() => { alert("Logging out..."); navigate('/'); }}
+                    onClick={() => {
+                        localStorage.removeItem('token');
+                        localStorage.removeItem('user');
+                        localStorage.removeItem('userId');
+                        alert("Logging out...");
+                        navigate('/');
+                    }}
                     className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-red-500/20 bg-red-500/10 text-red-200 hover:bg-red-500/15 transition font-bold text-sm"
                 >
                     <span className="text-lg">🚪</span>

@@ -88,7 +88,8 @@ def analyze_frame(image_base64: str, session_id: str):
 
         h, w, _ = img.shape
         print(f"Image decoded successfully. Shape: {img.shape}")
-        cv2.imwrite("debug_frame.jpg", img) # Save for debugging
+        # Privacy: the camera frame is analysed in memory only. It used to be
+        # saved to disk as "debug_frame.jpg" on every frame - that has been removed.
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
         # 2. Darkness & Occlusion Check

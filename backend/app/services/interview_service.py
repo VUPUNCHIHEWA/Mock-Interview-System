@@ -1,5 +1,6 @@
 import json
 import math
+import os
 import time
 import re
 import traceback
@@ -10,6 +11,40 @@ from app.services.question_bank import get_next_question, AVAILABLE_ROLES
 from app.services.voice_analysis import analyze_voice, compute_session_vocal_score
 from app.services.ml_model import predict_confidence_level
 from app.services.career_resources import get_recommended_resources
+
+# --- Privacy: raw voice recordings ------------------------------------------
+# The consent page promises participant data is used "solely for providing
+# interview feedback". Once an answer has been transcribed and measured, the
+# recording itself is no longer needed, so it is DELETED by default. Only the
+# results are kept (the transcript text and the filler / pause / pitch numbers).
+# To keep recordings (for example in a pilot study, WITH participant consent),
+# set KEEP_AUDIO_RECORDINGS=true in backend/.env
+KEEP_AUDIO_RECORDINGS = os.getenv("KEEP_AUDIO_RECORDINGS", "false").strip().lower() == "true"
+
+
+def _delete_audio_files(webm_path):
+    """
+    Deletes a recording and its .wav copy, then removes the session / user
+    folders if they are now empty. Never raises: a cleanup problem must not
+    break the interview.
+    """
+    if not webm_path:
+        return
+    for path in (webm_path, webm_path.replace(".webm", ".wav")):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            print(f"⚠️ Could not delete {path}: {e}")
+
+    folder = os.path.dirname(webm_path)
+    for _ in range(2):  # session folder, then user folder
+        try:
+            os.rmdir(folder)  # only succeeds when the folder is empty
+        except OSError:
+            break
+        folder = os.path.dirname(folder)
 
 # NOTE (BSc Research Feature - Step 1): Question generation is now handled
 # by the static, literature-curated question_bank module instead of Gemini.
@@ -124,12 +159,12 @@ async def continue_interview_session(data: dict, client=None, db=None):
     user_id = session.user_id
     audio_path = None
     voice_metrics = None
+    audio_received = bool(audio_content) and not is_skip
 
     # --- Skip Question handling: bypass audio processing entirely if
     # this is a skip (no real answer was given, so nothing to analyze).
     if not is_skip and audio_content:
         try:
-            import os, time
             folder_path = f"uploads/user_{user_id}/session_{session_id}"
             os.makedirs(folder_path, exist_ok=True)
             audio_path = f"{folder_path}/audio_{int(time.time())}.webm"
@@ -157,6 +192,13 @@ async def continue_interview_session(data: dict, client=None, db=None):
             print(f"🎙️ Voice metrics: {voice_metrics}")
         except Exception as e:
             print(f"❌ Audio processing error: {e}")
+        finally:
+            # Privacy: delete the recording as soon as it has been analysed
+            # (also when analysis failed). audio_path becomes None so no path
+            # to a deleted file is saved in the database.
+            if not KEEP_AUDIO_RECORDINGS and audio_path:
+                _delete_audio_files(audio_path)
+                audio_path = None
 
     # Real visual score only. None means "no valid camera reading" - it is
     # NOT replaced by a default (a missing measurement must never look like
@@ -208,7 +250,7 @@ async def continue_interview_session(data: dict, client=None, db=None):
             f"{voice_metrics.get('long_pause_count')} long pauses (over 3 seconds), "
             f"pitch variation {pitch_text}"
         )
-    elif audio_path:
+    elif audio_received:
         vocal_context = "not available (audio was recorded but could not be analysed)"
     else:
         vocal_context = "not available (text-only response)"
