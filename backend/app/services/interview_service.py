@@ -1,3 +1,4 @@
+import io
 import json
 import math
 import os
@@ -5,12 +6,14 @@ import time
 import re
 import traceback
 from fastapi import HTTPException
+from fastapi.concurrency import run_in_threadpool
 from app.core.config import GEMINI_MODEL, gemini_client, gemini_types
 from app.models import InterviewSession, InterviewResponse
-from app.services.question_bank import get_next_question, AVAILABLE_ROLES
-from app.services.voice_analysis import analyze_voice, compute_session_vocal_score
+from app.services.question_bank import get_next_question, AVAILABLE_ROLES, GENERAL_INTERVIEW_ROLE
+from app.services.voice_analysis import analyze_voice, compute_session_vocal, combine_confidence, confidence_missing_reason
 from app.services.ml_model import predict_confidence_level
 from app.services.career_resources import get_recommended_resources
+from app.services import ai_provider
 
 # --- Privacy: raw voice recordings ------------------------------------------
 # The consent page promises participant data is used "solely for providing
@@ -86,6 +89,130 @@ def _parse_score(raw):
     return max(0.0, min(100.0, value))
 
 
+# --- Speech-to-text & scoring ----------------------------------------------
+# All AI calls go through app/services/ai_provider.py:
+#   speech-to-text: Groq Whisper large-v3 -> Gemini (backup) -> free Google
+#                   Web Speech (last resort)
+#   scoring/summary: Groq Llama 3.3 70B -> Gemini (backup)
+# (Gemini alone hit its free daily limit within 1-2 interviews.)
+
+
+# --- Auto-replaced questions -------------------------------------------------
+# If the student's face is not visible for 30 s in a row after a question
+# was asked (e.g. they had to leave suddenly), the frontend abandons that
+# question: its camera data is deleted, it does NOT count toward the 6
+# questions, and a NEW question replaces it (a new one, so leaving on
+# purpose to look up an answer gives no advantage).
+REPLACED_ANSWER_MARKER = "[Replaced - face not visible for 30 s]"
+
+# A voice answer with no real speech in it (student stayed silent). Saved
+# with score 0 and NOT sent to the AI, so a Whisper "silence word" such as
+# "Thank you." can never be scored as if it were the student's answer.
+NO_SPEECH_MARKER = "[No spoken answer detected]"
+NO_SPEECH_FEEDBACK = "No speech was detected in your recording, so this answer was not evaluated."
+
+# Scoring version saved with each session (see end_interview_session).
+SCORING_VERSION = 2
+
+
+def stored_main_score(session):
+    """
+    The session's main (confidence) score for lists and charts, or None for
+    sessions scored with the older formula (60% answer + 20% visual + 20%
+    vocal), whose overall score means something different and must not be
+    mixed with the new one.
+    """
+    if session.interview_mode and session.interview_mode.upper() == "TEXT":
+        return session.overall_score
+    try:
+        summary = json.loads(session.summary_feedback) if session.summary_feedback else {}
+    except Exception:
+        summary = {}
+    if (summary or {}).get("scoringVersion", 1) >= SCORING_VERSION:
+        # Both parts are needed. Sessions saved before this rule, where the
+        # score came from camera (or voice) alone, are shown as N/A too.
+        if summary.get("visualScore") is None or summary.get("vocalScore") is None:
+            return None
+        return session.overall_score
+    return None
+
+
+
+def _question_history(db, user_id, current_session_id=None) -> dict:
+    """
+    Questions this student was asked in EARLIER interview sessions, as
+    {question_text: recency} (larger number = asked more recently). Used so a
+    student who practises many times does not keep getting the same
+    questions (see question_bank._next_general_question).
+    """
+    if not db or user_id is None:
+        return {}
+    try:
+        rows = db.query(InterviewResponse.question_text).join(
+            InterviewSession, InterviewSession.session_id == InterviewResponse.session_id
+        ).filter(
+            InterviewSession.user_id == user_id,
+            InterviewSession.session_id != (current_session_id or ""),
+        ).order_by(InterviewResponse.id.asc()).all()
+    except Exception as e:
+        print(f"⚠️ Could not read question history ({e}) - questions may repeat.")
+        return {}
+    history = {}
+    for index, (text,) in enumerate(rows):
+        if text:
+            history[text] = index  # later rows overwrite -> most recent use
+    return history
+
+
+async def replace_current_question(data: dict, db=None):
+    from app.models import VisualMetric
+
+    session_id = data.get("sessionId")
+    if not session_id or not db:
+        raise HTTPException(status_code=400, detail="Active interview session ID and DB session required")
+    session = db.query(InterviewSession).filter(InterviewSession.session_id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Active interview session not found")
+
+    current = db.query(InterviewResponse).filter(
+        InterviewResponse.session_id == session_id
+    ).order_by(InterviewResponse.id.desc()).first()
+    if not current or current.user_answer is not None:
+        raise HTTPException(status_code=400, detail="There is no open question to replace")
+
+    # 1) Delete the camera frames recorded for this question. Frames are only
+    #    recorded while a question is open, so everything stored after the
+    #    question was created belongs to it.
+    deleted = db.query(VisualMetric).filter(
+        VisualMetric.session_id == session_id,
+        VisualMetric.timestamp >= current.created_at,
+    ).delete(synchronize_session=False)
+
+    # 2) Mark the abandoned question (kept so it is never asked again).
+    current.user_answer = REPLACED_ANSWER_MARKER
+    current.score = None
+    current.feedback = REPLACED_ANSWER_MARKER
+
+    # 3) A new question in its place.
+    asked = [row[0] for row in db.query(InterviewResponse.question_text).filter(
+        InterviewResponse.session_id == session_id).all()]
+    history = _question_history(db, session.user_id, session_id)
+    new_question = get_next_question(session.role, asked, difficulty=session.difficulty,
+                                     history=history)["question"]
+    db.add(InterviewResponse(session_id=session_id, question_text=new_question))
+    db.commit()
+    print(f"🔁 Question replaced (face not visible 30 s); {deleted} camera frames discarded.")
+
+    return {"success": True, "nextQuestion": new_question, "framesDiscarded": deleted}
+
+
+def _interview_context(session) -> str:
+    """How the interview is described to Gemini in prompts."""
+    if session.role == GENERAL_INTERVIEW_ROLE:
+        return "a general job interview (general, non-role-specific questions)"
+    return f"a {session.role} role ({session.difficulty} level)"
+
+
 async def start_interview_session(data: dict, client=None, db=None):
     active_client = client or gemini_client
 
@@ -98,11 +225,17 @@ async def start_interview_session(data: dict, client=None, db=None):
 
     session_id = f"session_{int(time.time())}"
 
-    if role not in AVAILABLE_ROLES:
+    # General Interview has no job role and no level.
+    if role == GENERAL_INTERVIEW_ROLE:
+        difficulty = None
+
+    if role not in AVAILABLE_ROLES and role != GENERAL_INTERVIEW_ROLE:
         print(f"⚠️ Role '{role}' not in curated question bank {AVAILABLE_ROLES} - "
               f"using general questions only for this session.")
 
-    first_question_data = get_next_question(role, already_asked=[], difficulty=difficulty)
+    history = _question_history(db, user_id)
+    first_question_data = get_next_question(role, already_asked=[], difficulty=difficulty,
+                                            history=history)
     first_question = first_question_data["question"]
 
     if db:
@@ -149,6 +282,13 @@ async def continue_interview_session(data: dict, client=None, db=None):
     # frontend can show it distinctly.
     is_skip = data.get("skipQuestion", False)
 
+    # Focus (voice) interview mode: answers are only SAVED here (audio is
+    # still transcribed and voice-analysed now). Gemini checks all answers
+    # together at the end, in end_interview_session(), so the student never
+    # waits for Gemini between questions.
+    defer_evaluation = str(data.get("deferEvaluation", "")).strip().lower() in ("true", "1", "yes")
+    fallback_transcript = (data.get("fallbackTranscript") or "").strip()
+
     if not session_id or not db:
         raise HTTPException(status_code=400, detail="Active interview session ID and DB session required")
 
@@ -173,23 +313,32 @@ async def continue_interview_session(data: dict, client=None, db=None):
                 buffer.write(audio_content)
             print(f"🎙️ Audio file saved to {audio_path}")
 
-            import speech_recognition as sr
-            from pydub import AudioSegment
-            
             wav_path = audio_path.replace(".webm", ".wav")
-            audio = AudioSegment.from_file(audio_path, format="webm")
-            audio.export(wav_path, format="wav")
-            
-            recognizer = sr.Recognizer()
-            with sr.AudioFile(wav_path) as source:
-                audio_data = recognizer.record(source)
-                transcribed_text = recognizer.recognize_google(audio_data)
-                
-            user_message = f"{user_message} {transcribed_text}".strip()
-            print(f"🎙️ Transcribed Audio: {transcribed_text}")
 
-            voice_metrics = analyze_voice(transcribed_text, wav_path)
-            print(f"🎙️ Voice metrics: {voice_metrics}")
+            def _convert_and_transcribe():
+                # Blocking work (audio conversion + speech-to-text). Run in a
+                # worker thread (below) so it does not freeze live camera
+                # analysis while it runs.
+                from pydub import AudioSegment
+
+                audio = AudioSegment.from_file(audio_path, format="webm")
+                audio.export(wav_path, format="wav")
+
+                # Groq Whisper -> Gemini -> Google Web Speech (see ai_provider.py)
+                text, engine = ai_provider.transcribe(audio, wav_path)
+                print(f"🎙️ Transcribed with {engine}.")
+                return text
+
+            transcribed_text = await run_in_threadpool(_convert_and_transcribe)
+
+            user_message = f"{user_message} {transcribed_text}".strip()
+            print(f"🎙️ Transcribed Audio: {transcribed_text!r}")
+
+            # No speech -> no voice metrics (0 fillers / 0 pauses from a
+            # silent clip would wrongly look like good delivery).
+            if transcribed_text.strip():
+                voice_metrics = await run_in_threadpool(analyze_voice, transcribed_text, wav_path)
+                print(f"🎙️ Voice metrics: {voice_metrics}")
         except Exception as e:
             print(f"❌ Audio processing error: {e}")
         finally:
@@ -199,6 +348,17 @@ async def continue_interview_session(data: dict, client=None, db=None):
             if not KEEP_AUDIO_RECORDINGS and audio_path:
                 _delete_audio_files(audio_path)
                 audio_path = None
+
+    # If server-side transcription failed (or no audio arrived), fall back to
+    # the browser's own speech-to-text so the answer text is not lost.
+    if not is_skip and not user_message.strip() and fallback_transcript:
+        user_message = fallback_transcript
+        print("🎙️ Using browser transcript as fallback answer text.")
+
+    # Voice answer, but nothing was said (server AND browser heard nothing).
+    no_speech = audio_received and not user_message.strip()
+    if no_speech:
+        print("🔇 No spoken answer - saved as 'no answer', not sent to the AI.")
 
     # Real visual score only. None means "no valid camera reading" - it is
     # NOT replaced by a default (a missing measurement must never look like
@@ -221,6 +381,13 @@ async def continue_interview_session(data: dict, client=None, db=None):
             last_response.score = 0
             last_response.feedback = "[Skipped - not evaluated]"
             db.commit()
+        elif no_speech:
+            last_response.user_answer = NO_SPEECH_MARKER
+            last_response.score = 0
+            last_response.feedback = NO_SPEECH_FEEDBACK
+            if vci is not None:
+                last_response.visual_confidence_score = vci
+            db.commit()
         else:
             last_response.user_answer = user_message
             if audio_path:
@@ -230,6 +397,9 @@ async def continue_interview_session(data: dict, client=None, db=None):
                 last_response.filler_word_count = voice_metrics["filler_word_count"]
                 last_response.long_pause_count = voice_metrics["long_pause_count"]
                 last_response.pitch_variation = voice_metrics["pitch_variation"]
+                last_response.speech_seconds = voice_metrics.get("speech_seconds")
+                last_response.long_pause_seconds = voice_metrics.get("long_pause_seconds")
+                last_response.pitch_pvq = voice_metrics.get("pitch_pvq")
 
             if vci is not None:
                 last_response.visual_confidence_score = vci
@@ -243,11 +413,13 @@ async def continue_interview_session(data: dict, client=None, db=None):
         visual_line = "not available (no valid camera reading for this answer)"
 
     if voice_metrics:
-        pitch = voice_metrics.get("pitch_variation")
-        pitch_text = f"{pitch:.1f}" if isinstance(pitch, (int, float)) else "not available"
+        pvq = voice_metrics.get("pitch_pvq")
+        pitch_text = f"{pvq:.3f} (pitch variation quotient)" if isinstance(pvq, (int, float)) else "not available"
+        seconds = voice_metrics.get("speech_seconds")
+        seconds_text = f" in {seconds:.0f} s of answer time" if isinstance(seconds, (int, float)) else ""
         vocal_context = (
-            f"Measured from audio: {voice_metrics.get('filler_word_count')} filler words, "
-            f"{voice_metrics.get('long_pause_count')} long pauses (over 3 seconds), "
+            f"Measured from audio: {voice_metrics.get('filler_word_count')} filler words{seconds_text}, "
+            f"{voice_metrics.get('long_pause_count')} long pauses (3 seconds or more), "
             f"pitch variation {pitch_text}"
         )
     elif audio_received:
@@ -257,7 +429,7 @@ async def continue_interview_session(data: dict, client=None, db=None):
 
     if session.interview_mode and session.interview_mode.upper() == "TEXT":
         dynamic_prompt = f"""
-    You are an expert technical interviewer evaluating a candidate for a {session.role} role ({session.difficulty} level).
+    You are an expert technical interviewer evaluating a candidate for {_interview_context(session)}.
     
     Question Asked: "{last_question}"
     Candidate's Answer (Text/Transcribed): "{user_message}"
@@ -275,7 +447,7 @@ async def continue_interview_session(data: dict, client=None, db=None):
     """
     else:
         dynamic_prompt = f"""
-    You are an expert technical interviewer evaluating a candidate for a {session.role} role ({session.difficulty} level).
+    You are an expert technical interviewer evaluating a candidate for {_interview_context(session)}.
     
     Question Asked: "{last_question}"
     Candidate's Answer (Text/Transcribed): "{user_message}"
@@ -313,45 +485,22 @@ async def continue_interview_session(data: dict, client=None, db=None):
     # evaluate, and last_response.score is already set to 0 above.
     if is_skip:
         default_eval = {"score": 0, "feedback": "[Skipped - not evaluated]"}
-    elif active_client:
-        try:
-            config = None
-            if gemini_types:
-                config = gemini_types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.4,
-                )
+    elif no_speech:
+        default_eval = {"score": 0, "feedback": NO_SPEECH_FEEDBACK}
+    elif defer_evaluation:
+        # Evaluated later, together with all other answers.
+        default_eval = {"score": None, "feedback": None}
+    elif ai_provider.available():
+        parsed_json, engine = await run_in_threadpool(
+            ai_provider.generate_json, dynamic_prompt, 0.4, "evaluation")
+        answer_score = _parse_score(parsed_json.get("score")) if isinstance(parsed_json, dict) else None
+        if answer_score is not None:
+            default_eval = {"score": answer_score, "feedback": parsed_json.get("feedback") or ""}
+            print(f"✅ Evaluation success ({engine}): Score={answer_score}")
+        else:
+            print("⚠️ No valid score from any AI provider - answer left as Not Evaluated.")
 
-            response = active_client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=dynamic_prompt,
-                config=config,
-            )
-
-            if response and response.text:
-                print("📥 Raw Gemini Evaluation Response:", response.text)
-                parsed_json = clean_json_response(response.text)
-                gemini_score = _parse_score(parsed_json.get("score")) if isinstance(parsed_json, dict) else None
-                if gemini_score is not None:
-                    default_eval = {
-                        "score": gemini_score,
-                        "feedback": parsed_json.get("feedback") or "",
-                    }
-                    print(f"✅ Gemini Evaluation Success: Score={default_eval.get('score')}")
-                else:
-                    print("⚠️ Gemini response had no valid score - answer left as Not Evaluated.")
-        except Exception as e:
-            error_msg = str(e).lower()
-            print(f"❌ Gemini Error during chat-interview: {str(e)}")
-            traceback.print_exc()
-            if "429" in error_msg or "quota" in error_msg or "exhausted" in error_msg:
-                return {
-                    "success": False,
-                    "limit_exceeded": True,
-                    "message": "Gemini API reach limit exceeded. Please try again later."
-                }
-
-    if last_response and last_response.score is None:
+    if last_response and last_response.score is None and not defer_evaluation:
         last_response.score = default_eval.get("score")
         last_response.feedback = default_eval.get("feedback", "")
         db.commit()
@@ -362,8 +511,15 @@ async def continue_interview_session(data: dict, client=None, db=None):
         InterviewResponse.session_id == session_id
     ).all()
     already_asked = [row[0] for row in already_asked_rows]
+    # Questions replaced because the face was not visible do not count
+    # toward the 6 (they are still in already_asked so they are never repeated).
+    replaced_count = db.query(InterviewResponse).filter(
+        InterviewResponse.session_id == session_id,
+        InterviewResponse.user_answer == REPLACED_ANSWER_MARKER,
+    ).count()
+    counted_questions = len(already_asked) - replaced_count
 
-    if len(already_asked) >= MAX_QUESTIONS_PER_SESSION:
+    if counted_questions >= MAX_QUESTIONS_PER_SESSION:
         return {
             "success": True,
             "nextQuestion": None,
@@ -374,7 +530,9 @@ async def continue_interview_session(data: dict, client=None, db=None):
             },
         }
 
-    next_question_data = get_next_question(session.role, already_asked, difficulty=session.difficulty)
+    history = _question_history(db, session.user_id, session_id)
+    next_question_data = get_next_question(session.role, already_asked, difficulty=session.difficulty,
+                                           history=history)
     next_question = next_question_data["question"]
 
     new_question_db = InterviewResponse(
@@ -384,7 +542,7 @@ async def continue_interview_session(data: dict, client=None, db=None):
     db.add(new_question_db)
     db.commit()
 
-    session_complete_after_this = len(already_asked) + 1 >= MAX_QUESTIONS_PER_SESSION
+    session_complete_after_this = counted_questions + 1 >= MAX_QUESTIONS_PER_SESSION
 
     return {
         "success": True,
@@ -396,6 +554,81 @@ async def continue_interview_session(data: dict, client=None, db=None):
             "feedback": default_eval.get("feedback", ""),
         },
     }
+
+
+async def _evaluate_pending_answers(session, responses, active_client, db):
+    # Returns the AI engine that scored the answers (or None).
+    """
+    Focus (voice) interview mode: Gemini checks ALL saved-but-unscored
+    answers in ONE request at the end of the interview, instead of one
+    request after every answer. Answers Gemini cannot score stay None
+    ("Not Evaluated") - never a made-up number.
+    """
+    pending = [
+        r for r in responses
+        if r.score is None and r.user_answer is not None
+        and r.user_answer != "[Skipped by student]"
+    ]
+    if not pending or not ai_provider.available():
+        return None
+
+    items = [
+        {"index": i, "question": r.question_text, "answer": r.user_answer or ""}
+        for i, r in enumerate(pending)
+    ]
+    batch_prompt = f"""
+    You are an expert technical interviewer evaluating a candidate for {_interview_context(session)}.
+    The answers below were spoken by the candidate and transcribed automatically.
+
+    Questions and answers (JSON):
+    {json.dumps(items, indent=2)}
+
+    For EACH item:
+    1. Score the answer 0-100 for technical accuracy, relevance and depth ONLY.
+       Do not judge grammar, transcription errors or delivery.
+       An empty or off-topic answer gets a low score.
+    2. Write 1-2 sentences of specific feedback on technical correctness.
+
+    CRITICAL: Respond STRICTLY in valid JSON using this exact structure:
+    {{
+        "evaluations": [
+            {{"index": 0, "score": 85, "feedback": "Your answer covered..."}}
+        ]
+    }}
+    Include one entry for every index. Do NOT add any text outside the JSON object.
+    """
+
+    engine = None
+    try:
+        parsed, engine = await run_in_threadpool(
+            ai_provider.generate_json, batch_prompt, 0.4, "batch evaluation")
+        results = parsed.get("evaluations", []) if isinstance(parsed, dict) else []
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            try:
+                idx = int(item.get("index"))
+            except (TypeError, ValueError):
+                continue
+            if not 0 <= idx < len(pending):
+                continue
+            score = _parse_score(item.get("score"))
+            if score is None:
+                continue
+            pending[idx].score = score
+            pending[idx].feedback = item.get("feedback") or ""
+        db.commit()
+        print(f"✅ Batch evaluation ({engine}) saved for {len(results)} of {len(pending)} answers.")
+    except Exception as e:
+        print(f"❌ Error during batch evaluation: {str(e)}")
+        traceback.print_exc()
+
+    # Anything still unscored is shown honestly as "Not Evaluated".
+    for r in pending:
+        if r.score is None and not r.feedback:
+            r.feedback = "Your answer was recorded, but it could not be evaluated automatically this time."
+    db.commit()
+    return engine
 
 
 async def end_interview_session(data: dict, client=None, db=None):
@@ -421,8 +654,16 @@ async def end_interview_session(data: dict, client=None, db=None):
     # drag down the average) while restoring full transparency.
     full_responses = db.query(InterviewResponse).filter(
         InterviewResponse.session_id == session_id,
-        InterviewResponse.user_answer != None
+        InterviewResponse.user_answer != None,
+        InterviewResponse.user_answer != REPLACED_ANSWER_MARKER,
     ).order_by(InterviewResponse.id.asc()).all()
+    replaced_questions = db.query(InterviewResponse).filter(
+        InterviewResponse.session_id == session_id,
+        InterviewResponse.user_answer == REPLACED_ANSWER_MARKER,
+    ).count()
+
+    # Focus (voice) interview mode: check all saved answers together now.
+    evaluation_engine = await _evaluate_pending_answers(session, full_responses, active_client, db)
 
     evaluations = []
     for r in full_responses:
@@ -446,7 +687,9 @@ async def end_interview_session(data: dict, client=None, db=None):
     ]
 
     total_score = sum(eval_item.get("score", 0) for eval_item in evaluations if eval_item.get("score") is not None and not eval_item["isSkipped"])
-    avg_score = int(total_score / len(responses)) if responses else 0
+    # None (not 0) when no answer could be scored yet (e.g. AI service busy):
+    # "not checked yet" must never count as a 0 answer score.
+    avg_score = int(total_score / len(responses)) if responses else None
 
     from app.models import VisualMetric
     visual_metrics = db.query(VisualMetric).filter(VisualMetric.session_id == session_id).all()
@@ -454,13 +697,31 @@ async def end_interview_session(data: dict, client=None, db=None):
     valid_visual_scores = [m.confidence_score for m in visual_metrics if m.confidence_score is not None]
     frames_excluded = len(visual_metrics) - len(valid_visual_scores)
     if frames_excluded > 0:
-        print(f"⚠️ {frames_excluded}/{len(visual_metrics)} visual frames had no face "
-              f"detected and were excluded from the average (session {session_id}).")
+        print(f"⚠️ {frames_excluded}/{len(visual_metrics)} visual frames could not be "
+              f"processed (technical error) and were excluded from the average (session {session_id}).")
 
     if valid_visual_scores:
         avg_visual = sum(valid_visual_scores) / len(valid_visual_scores)
     else:
         avg_visual = None
+
+    # Per-factor visual breakdown (Eye Contact = gaze score, Head Pose =
+    # head stability score), averaged over frames where a face was found.
+    # Frames saved before these columns existed have no value and are
+    # skipped, so the breakdown is simply missing for older sessions.
+    gaze_values = [m.gaze_score for m in visual_metrics if m.gaze_score is not None]
+    head_values = [m.head_stability_score for m in visual_metrics if m.head_stability_score is not None]
+    visual_breakdown = None
+    if gaze_values or head_values:
+        # Share of measured time (listening + answering) where the face was not visible
+        # (those frames already count as 0 in Eye Contact / Head Pose).
+        measured_frames = [m for m in visual_metrics if m.confidence_score is not None]
+        no_face_frames = sum(1 for m in measured_frames if m.emotion == "NO_FACE")
+        visual_breakdown = {
+            "eyeContact": round(sum(gaze_values) / len(gaze_values), 1) if gaze_values else None,
+            "headPose": round(sum(head_values) / len(head_values), 1) if head_values else None,
+            "faceNotVisiblePct": round(100.0 * no_face_frames / len(measured_frames), 1) if measured_frames else None,
+        }
     
     # NOTE: uses full_responses (not the scored-only subset) because
     # audio processing (filler/pause/pitch) happens independently of
@@ -468,17 +729,27 @@ async def end_interview_session(data: dict, client=None, db=None):
     # can still have real, valid voice metrics that would otherwise be
     # incorrectly lost from this average.
     responses_with_audio = [r for r in full_responses if r.filler_word_count is not None]
+    # Vocal score (see voice_analysis.py / VOCAL_SCORING.md).
+    vocal_result = compute_session_vocal(responses_with_audio)
+    final_vocal = vocal_result["vocalScore"]
+    vocal_breakdown = vocal_result["vocalBreakdown"]
     if responses_with_audio:
+        # Raw per-answer averages: only used as inputs for the decision-tree
+        # model (ml_model.py), which was trained on these numbers.
         avg_filler = sum(r.filler_word_count for r in responses_with_audio) / len(responses_with_audio)
-        avg_pause = sum(r.long_pause_count for r in responses_with_audio) / len(responses_with_audio)
-        avg_pitch = sum(r.pitch_variation for r in responses_with_audio) / len(responses_with_audio)
-        final_vocal = compute_session_vocal_score(avg_filler, avg_pause, avg_pitch)
-        vocal_context = (f"Avg filler words: {avg_filler:.1f}, avg long pauses: {avg_pause:.1f}, "
-                          f"avg pitch variation: {avg_pitch:.1f}")
+        avg_pause = sum(r.long_pause_count or 0 for r in responses_with_audio) / len(responses_with_audio)
+        avg_pitch = sum(r.pitch_variation or 0 for r in responses_with_audio) / len(responses_with_audio)
     else:
-        final_vocal = None
-        vocal_context = "No audio answers were recorded in this session."
         avg_filler, avg_pause, avg_pitch = None, None, None
+    if vocal_breakdown:
+        vocal_context = (
+            f"Filler words: {vocal_breakdown['fillerWords']['value']} per minute; "
+            f"long pauses (3 s or more): {vocal_breakdown['longPauses']['value']}% of answer time; "
+            f"pitch variation quotient: {vocal_breakdown['pitchVariation']['value']}")
+    elif responses_with_audio:
+        vocal_context = "Voice could not be measured for the recorded answers."
+    else:
+        vocal_context = "No audio answers were recorded in this session."
 
     audio_responses = sum(1 for r in full_responses if r.audio_path)
     textual_score = avg_score
@@ -486,10 +757,16 @@ async def end_interview_session(data: dict, client=None, db=None):
     key_improvements = "Focus on explaining real-world architecture and edge cases."
     final_visual = int(avg_visual) if avg_visual is not None else None
 
-    confidence_level = predict_confidence_level(avg_visual, avg_filler, avg_pause, avg_pitch)
+    # The AI confidence level also needs BOTH camera and voice: with no
+    # measured voice it is "NOT_AVAILABLE", never a camera-only guess.
+    if avg_visual is None or final_vocal is None:
+        confidence_level = "NOT_AVAILABLE"
+    else:
+        confidence_level = predict_confidence_level(avg_visual, avg_filler, avg_pause, avg_pitch)
     print(f"🌳 ML Core - Predicted Confidence Level: {confidence_level}")
 
-    if active_client and evaluations:
+    summary_engine = None
+    if ai_provider.available() and evaluations:
         try:
             is_text_mode = session.interview_mode and session.interview_mode.upper() == "TEXT"
             
@@ -500,7 +777,7 @@ async def end_interview_session(data: dict, client=None, db=None):
                 Session Data:
                 - Textual Evaluations (Q&A): {json.dumps(evaluations, indent=2)}
 
-                Provide a highly detailed, constructive, and organized summary of the candidate's performance for a {session.role} role.
+                Provide a highly detailed, constructive, and organized summary of the candidate's performance in {_interview_context(session)}.
                 Focus strictly on technical accuracy, logical reasoning, and depth of knowledge.
 
                 You must provide:
@@ -522,7 +799,7 @@ async def end_interview_session(data: dict, client=None, db=None):
                 - Vocal Delivery Metrics (measured from audio, for your context only,
                   do not re-score this): {vocal_context}
 
-                Provide a highly detailed, constructive, and organized summary of the candidate's performance for a {session.role} role.
+                Provide a highly detailed, constructive, and organized summary of the candidate's performance in {_interview_context(session)}.
                 
                 You must provide:
                 1. "overallStrengths": An array of 3-5 specific, detailed bullet points highlighting what the candidate did well technically and communicatively (you may reference the visual/vocal context above descriptively).
@@ -533,40 +810,39 @@ async def end_interview_session(data: dict, client=None, db=None):
                 "overallStrengths" (array of strings), "keyImprovements" (array of strings), "textualScore" (integer)
                 """
             
-            config = None
-            if gemini_types:
-                config = gemini_types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.4,
-                )
-
-            response = active_client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=summary_prompt,
-                config=config,
-            )
-
-            if response and response.text:
-                print("📥 Raw Gemini Summary Response:", response.text)
-                summary_data = clean_json_response(response.text)
+            summary_data, summary_engine = await run_in_threadpool(
+                ai_provider.generate_json, summary_prompt, 0.4, "summary")
+            if isinstance(summary_data, dict):
                 overall_strengths = summary_data.get("overallStrengths", overall_strengths)
                 key_improvements = summary_data.get("keyImprovements", key_improvements)
                 textual_score = summary_data.get("textualScore", textual_score)
         except Exception as e:
-            print(f"❌ Gemini Error during end-interview: {str(e)}")
+            print(f"❌ Error during end-interview summary: {str(e)}")
             traceback.print_exc()
 
+    # MAIN SCORE = CONFIDENCE SCORE = average of the visual and vocal scores
+    # (the study measures confidence). The answer score (textual_score) is
+    # reported separately and is NOT part of it, so a busy AI service never
+    # delays the main score. Text-only mode has no camera/voice, so there
+    # the answer score is the only score.
     if session.interview_mode and session.interview_mode.upper() == "TEXT":
+        confidence_score = None
+        confidence_note = None
         final_overall = textual_score
     else:
-        components = [(textual_score, 0.6)]
-        if final_visual is not None:
-            components.append((final_visual, 0.2))
-        if final_vocal is not None:
-            components.append((final_vocal, 0.2))
+        # Needs BOTH camera and voice - never camera (or voice) alone.
+        confidence_score = combine_confidence(final_visual, final_vocal)
+        confidence_note = confidence_missing_reason(final_visual, final_vocal)
+        final_overall = confidence_score
 
-        weight_sum = sum(w for _, w in components)
-        final_overall = int(sum(score * (w / weight_sum) for score, w in components))
+    # When this runs again ("Evaluate now" after a limit), keep the earlier
+    # model record for anything that did not need scoring this time.
+    try:
+        previous_models = (json.loads(session.summary_feedback) or {}).get("aiModels") or {} if session.summary_feedback else {}
+    except Exception:
+        previous_models = {}
+    evaluation_engine = evaluation_engine or previous_models.get("evaluation")
+    summary_engine = summary_engine or previous_models.get("summary")
 
     session.status = "Completed"
     session.overall_score = final_overall
@@ -577,7 +853,19 @@ async def end_interview_session(data: dict, client=None, db=None):
         "textualScore": textual_score,
         "visualScore": final_visual,
         "vocalScore": final_vocal,
-        "confidenceLevel": confidence_level
+        "confidenceScore": confidence_score,
+        "confidenceMissingReason": confidence_note,
+        # 2 = main score is the confidence score (visual + vocal) with the
+        # per-minute / time-share / PVQ vocal scoring. Older sessions (no
+        # version) used 60% answer + 20% visual + 20% vocal.
+        "scoringVersion": SCORING_VERSION,
+        "visualBreakdown": visual_breakdown,
+        "vocalBreakdown": vocal_breakdown,
+        "replacedQuestions": replaced_questions,
+        "confidenceLevel": confidence_level,
+        # Which AI did the scoring - keep sessions from different models
+        # apart when analysing research data.
+        "aiModels": {"evaluation": evaluation_engine, "summary": summary_engine},
     }
     session.summary_feedback = json.dumps(summary_dict)
     
@@ -589,7 +877,11 @@ async def end_interview_session(data: dict, client=None, db=None):
     # content/textual score indicates a genuine knowledge gap; behavioral
     # weaknesses (visual/vocal) already have actionable tips via the
     # Progress Tracker's Focus Area feature.
-    recommended_resources = get_recommended_resources(session.role, textual_score)
+    if session.role == GENERAL_INTERVIEW_ROLE:
+        # Learning resources are role-based; a General Interview has no role.
+        recommended_resources = {"triggered": False, "resources": [], "reason": None}
+    else:
+        recommended_resources = get_recommended_resources(session.role, textual_score)
     
     return {
         "success": True,
@@ -602,6 +894,14 @@ async def end_interview_session(data: dict, client=None, db=None):
         "textualScore": textual_score,
         "visualScore": final_visual,
         "vocalScore": final_vocal,
+        "confidenceScore": confidence_score,
+        "confidenceMissingReason": confidence_note,
+        "scoringVersion": SCORING_VERSION,
+        "visualBreakdown": visual_breakdown,
+        "vocalBreakdown": vocal_breakdown,
+        "replacedQuestions": replaced_questions,
+        "aiModels": {"evaluation": evaluation_engine, "summary": summary_engine},
+        "sessionId": session.session_id,
         "role": session.role,
         "difficulty": session.difficulty,
         "createdAt": session.created_at.isoformat() if session.created_at else None,

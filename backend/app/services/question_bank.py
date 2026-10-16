@@ -1,73 +1,153 @@
 """
-question_bank/questions.py
+question_bank.py
 
-Static Question Bank Module - Step 6 (Final: General + Role-General + Technical+Difficulty)
+Static Question Bank Module
 
 Purpose:
-    Provides a fixed set of interview questions, replacing the earlier
-    Gemini-API-based dynamic question generation. Three layers:
-      1. GENERAL_QUESTIONS - behavioral/HR questions (all roles)
-      2. ROLE_GENERAL_QUESTIONS - role-relevant "what/skills/tools" questions
-      3. TECHNICAL_QUESTIONS - role + difficulty-tagged technical Q&A pairs
-         (used for the optional answer-similarity scoring feature)
+    Provides a fixed set of interview questions (no AI-generated
+    questions, so every student gets questions from the same known,
+    citable pool).
 
-Research basis for General + Role-Knowledge structure:
-    U.S. Office of Personnel Management (OPM). Structured Interview Guide.
+What the app uses now (General Interview - the only mode in the UI):
+    1. MANDATORY_OPENING_QUESTIONS - the same 3 warm-up questions, always
+       first, in a fixed order.
+    2. GENERAL_QUESTION_BANK - 56 general behavioural questions suitable
+       for any IT undergraduate, grouped by the NACE Career Readiness
+       Competencies (2025). Sources are listed next to the bank below
+       (University of Kansas HR behavioural questions, adapted; questions
+       written by the researcher from NACE definitions; a few kept from the
+       original bank).
+    Selection (_next_general_question): no repeats within a session;
+    questions the student has never been asked come first; after the whole
+    bank has been used, the least recently used ones; different
+    competencies within one session.
+
+    Answers are scored by the AI (ai_provider.generate_json) for the
+    separate question score; the confidence score (camera + voice) does
+    not depend on which question was asked.
+
+Older pools (NOT used by the current UI, kept for the earlier role-based
+mode and for reference):
+    - ROLE_GENERAL_QUESTIONS - role-relevant questions, curated from a
+      public Kaggle "Job Interview Questions" dataset (researcher's own
+      manual selection).
+    - TECHNICAL_QUESTIONS - role + difficulty tagged technical questions
+      (Software Engineer pool from a Kaggle dataset with the author's own
+      difficulty labels; QA Engineer pool labelled by the researcher with a
+      simple heuristic - ASSUMPTION, not literature-derived). The stored
+      reference answers are not used for scoring.
+    Structure basis for the older role mode: U.S. Office of Personnel
+    Management (OPM). Structured Interview Guide.
     https://www.opm.gov/policy-data-oversight/assessment-and-selection/structured-interviews/guide.pdf
-
-Role-general question source:
-    Curated from a public Kaggle "Job Interview Questions" dataset
-    (role, question, answer; 1620 rows, 54 roles) - researcher's own
-    manual selection, not a literature-derived technique.
-
-Technical + Difficulty question sources:
-    - Software Engineer pool: curated from a public Kaggle "Software
-      Interview Questions" dataset, which included pre-existing
-      Category and Difficulty (Easy/Medium/Hard) labels from the dataset
-      author - NOT assigned by the researcher.
-    - QA Engineer pool: curated from a public Kaggle "QA Interview
-      Questions" dataset (question/answer only, no difficulty labels
-      included). Difficulty labels for this pool were assigned by the
-      researcher using a simple heuristic (answer length + keyword
-      patterns e.g. "difference between", "lifecycle") and spot-checked
-      manually on a sample.
-      --- ASSUMPTION - not literature-derived --- this heuristic/manual
-      tagging is the researcher's own classification, not sourced from
-      the dataset or literature - noted here for transparency.
-
-Answer-similarity scoring (optional feature, Step 1 extension):
-    If enabled, student answers to TECHNICAL_QUESTIONS are compared to
-    the stored reference "answer" field using sentence-transformers
-    semantic similarity (same technique/library as cv_analysis module -
-    see Smart-Hiring, arXiv 2511.02537). Per project safety design:
-    results are presented as a similarity percentage alongside the
-    reference answer (not as a binary correct/incorrect verdict), and
-    the following literature-acknowledged limitation applies: semantic
-    similarity may under-score technically correct answers phrased very
-    differently from the reference answer (IRJMETS, 2025+ mock-interview
-    evaluation review). GENERAL_QUESTIONS and ROLE_GENERAL_QUESTIONS are
-    NOT content-scored (no single "correct" answer exists for them).
 """
 
 import random
 
-GENERAL_QUESTIONS = [
-    "Tell me about yourself.",
-    "What are your greatest strengths?",
-    "What do you consider your biggest weakness?",
-    "Why do you want to work in this field?",
-    "Describe a challenging situation you faced and how you handled it.",
-    "Where do you see yourself in five years?",
-    "Tell me about a time you worked in a team to complete a project.",
-    "How do you handle pressure or tight deadlines?",
-    "What motivates you to do your best work?",
-    "Describe a time you made a mistake and what you learned from it.",
-    "Why should we hire you for this position?",
-    "How do you prioritize tasks when you have multiple deadlines?",
-    "Tell me about a time you disagreed with a team member. How did you resolve it?",
-    "What are you most proud of in your academic or personal projects?",
-    "How do you stay updated with new skills or knowledge in your field?",
+# ---------------------------------------------------------------------------
+# GENERAL INTERVIEW QUESTION BANK (for IT undergraduates, any job role)
+# ---------------------------------------------------------------------------
+# The app measures interview CONFIDENCE (eye contact, head pose, filler
+# words, pauses, pitch), which does not depend on the job role, so every
+# session uses general behavioural questions suitable for any IT
+# undergraduate. The bank is organised by the NACE Career Readiness
+# Competencies so each session covers different skills, and it is large
+# enough that a student who practises many times does not keep getting the
+# same questions (see get_next_question).
+#
+# Sources (cite in the thesis):
+#   KU   = University of Kansas Human Resources (n.d.). Behavioral Interview
+#          Questions for Staff Searches.
+#          https://humanresources.ku.edu/behavioral-interview-questions-staff-searches
+#          -> questions ADAPTED for undergraduates (work-only wording such as
+#          "at work"/"manager" changed so university projects, internships
+#          and part-time jobs also fit).
+#   NACE = National Association of Colleges and Employers (2025). Career
+#          Readiness: Competencies for a Career-Ready Workforce.
+#          https://www.naceweb.org/career-readiness/competencies/career-readiness-defined/
+#          -> competency framework used to group the questions; questions
+#          marked NACE were written by the researcher from the competency
+#          definition (no KU question covered it).
+#   ORIG = common general interview question kept from the project's
+#          original question bank (no source was recorded for these).
+SRC_KU = "KU"
+SRC_NACE = "NACE"
+SRC_ORIG = "ORIG"
+
+GENERAL_QUESTION_BANK = [
+    # --- Teamwork ---
+    {"question": "Give me an example of a time you worked on a team. What was your role and what did you contribute?", "competency": "Teamwork", "source": SRC_KU},
+    {"question": "Tell me about a rewarding team experience you have had, in a university project or anywhere else.", "competency": "Teamwork", "source": SRC_KU},
+    {"question": "Tell me about a time you worked with a difficult team member. How did you handle it?", "competency": "Teamwork", "source": SRC_KU},
+    {"question": "Tell me about a team project that did not succeed. What happened and what did you learn?", "competency": "Teamwork", "source": SRC_KU},
+    {"question": "Tell me about a time you disagreed with a team member. How was it resolved?", "competency": "Teamwork", "source": SRC_KU},
+    {"question": "Would you rather work on a project on your own or as part of a team? Why?", "competency": "Teamwork", "source": SRC_KU},
+    {"question": "Describe a group project where team members had very different ideas. How did the team reach a decision?", "competency": "Teamwork", "source": SRC_NACE},
+    {"question": "Tell me about a time you worked in a team to complete a project.", "competency": "Teamwork", "source": SRC_ORIG},
+
+    # --- Communication ---
+    {"question": "Describe a time you had to explain a technical idea to someone without a technical background. How did you do it?", "competency": "Communication", "source": SRC_KU},
+    {"question": "Tell me about a time you had to teach someone a new skill or tool. What approach did you take?", "competency": "Communication", "source": SRC_KU},
+    {"question": "Give an example of a time you used your speaking skills to persuade a person or a group.", "competency": "Communication", "source": SRC_KU},
+    {"question": "Tell me about a time you had to change your communication style for a particular person.", "competency": "Communication", "source": SRC_KU},
+    {"question": "Tell me about a time you received important project information. How and when did you share it with your team?", "competency": "Communication", "source": SRC_KU},
+    {"question": "What is the most important piece of writing you have produced, such as a report or project documentation, and why?", "competency": "Communication", "source": SRC_KU},
+    {"question": "Describe a presentation you gave at university. How did you prepare, and how did it go?", "competency": "Communication", "source": SRC_NACE},
+
+    # --- Critical Thinking (problem solving, decisions) ---
+    {"question": "Tell me about a difficult problem you had to solve. How did you approach it?", "competency": "Critical Thinking", "source": SRC_KU},
+    {"question": "Describe a situation where you found a creative way to overcome an obstacle.", "competency": "Critical Thinking", "source": SRC_KU},
+    {"question": "Tell me about a time you came up with a new approach to a problem.", "competency": "Critical Thinking", "source": SRC_KU},
+    {"question": "Describe a time you noticed a possible problem early and took steps to prevent it.", "competency": "Critical Thinking", "source": SRC_KU},
+    {"question": "Tell me about a time you had to analyse information and make a recommendation.", "competency": "Critical Thinking", "source": SRC_KU},
+    {"question": "Describe the steps you go through to make an important decision. Give an example.", "competency": "Critical Thinking", "source": SRC_KU},
+    {"question": "Tell me about a time you had to make a quick decision. How did you decide?", "competency": "Critical Thinking", "source": SRC_KU},
+    {"question": "Describe a challenging situation you faced and how you handled it.", "competency": "Critical Thinking", "source": SRC_ORIG},
+    {"question": "Tell me about a bug or technical problem that took you a long time to fix. How did you finally solve it?", "competency": "Critical Thinking", "source": SRC_NACE},
+
+    # --- Leadership ---
+    {"question": "Tell me about a time you showed leadership skills.", "competency": "Leadership", "source": SRC_KU},
+    {"question": "Tell me about a time you took the lead on a difficult project.", "competency": "Leadership", "source": SRC_KU},
+    {"question": "Have you ever coached or helped someone else to succeed? Tell me about it.", "competency": "Leadership", "source": SRC_KU},
+    {"question": "Describe a situation that challenged you as a leader. How did you deal with it?", "competency": "Leadership", "source": SRC_KU},
+    {"question": "What qualities make a good leader? Give an example of a time you showed one of them.", "competency": "Leadership", "source": SRC_KU},
+    {"question": "Tell me about a project you were responsible for. How did you carry it out, and what was the result?", "competency": "Leadership", "source": SRC_KU},
+    {"question": "Tell me about a time you motivated others to do their best.", "competency": "Leadership", "source": SRC_KU},
+
+    # --- Professionalism (work ethic, organisation, pressure, integrity) ---
+    {"question": "Tell me about a time you went above and beyond to get something done.", "competency": "Professionalism", "source": SRC_KU},
+    {"question": "When have you worked the hardest? What made you push yourself?", "competency": "Professionalism", "source": SRC_KU},
+    {"question": "Tell me about a time you had to manage several important tasks or deadlines at once.", "competency": "Professionalism", "source": SRC_KU},
+    {"question": "How do you prioritise your tasks when you have multiple deadlines? Give an example.", "competency": "Professionalism", "source": SRC_KU},
+    {"question": "Tell me about a time you were under a lot of pressure. How did you handle it?", "competency": "Professionalism", "source": SRC_KU},
+    {"question": "Tell me about a time you disagreed with a rule or an approach. What did you do?", "competency": "Professionalism", "source": SRC_KU},
+    {"question": "Tell me about a mistake you made and what you learned from it.", "competency": "Professionalism", "source": SRC_KU},
+    {"question": "Tell me about a project that did not go according to plan. What did you change, and what was the result?", "competency": "Professionalism", "source": SRC_KU},
+    {"question": "Describe a time you kept a commitment even though it was difficult.", "competency": "Professionalism", "source": SRC_NACE},
+
+    # --- Career & Self-Development ---
+    {"question": "Give me an example of a goal you reached and how you achieved it.", "competency": "Career & Self-Development", "source": SRC_KU},
+    {"question": "What is the most useful criticism you have received, and how did you use it?", "competency": "Career & Self-Development", "source": SRC_KU},
+    {"question": "If you could improve one skill, what would it be and why?", "competency": "Career & Self-Development", "source": SRC_KU},
+    {"question": "What are you most proud of in your academic or personal projects?", "competency": "Career & Self-Development", "source": SRC_ORIG},
+    {"question": "Where do you see yourself in five years?", "competency": "Career & Self-Development", "source": SRC_ORIG},
+    {"question": "Why did you choose a career in IT?", "competency": "Career & Self-Development", "source": SRC_ORIG},
+    {"question": "Why should an employer hire you for an IT role?", "competency": "Career & Self-Development", "source": SRC_ORIG},
+    {"question": "How do you keep your skills up to date in the IT field?", "competency": "Career & Self-Development", "source": SRC_ORIG},
+    {"question": "What motivates you to do your best work?", "competency": "Career & Self-Development", "source": SRC_ORIG},
+    {"question": "Tell me about something new you taught yourself outside your degree. How did you learn it?", "competency": "Career & Self-Development", "source": SRC_NACE},
+
+    # --- Technology ---
+    {"question": "Tell me about a tool or technology you had to learn quickly for a project. How did you learn it?", "competency": "Technology", "source": SRC_NACE},
+    {"question": "Describe a time you used technology to make a task faster or easier.", "competency": "Technology", "source": SRC_NACE},
+    {"question": "Tell me about a time a tool or system you were using failed. What did you do?", "competency": "Technology", "source": SRC_NACE},
+    {"question": "Have you ever had to think about the ethical use of technology or data in a project? Tell me about it.", "competency": "Technology", "source": SRC_NACE},
+
+    # --- Equity & Inclusion ---
+    {"question": "Tell me about a time you worked with people whose background or point of view was very different from yours.", "competency": "Equity & Inclusion", "source": SRC_NACE},
+    {"question": "Describe a time you made sure everyone in a group had a chance to share their ideas.", "competency": "Equity & Inclusion", "source": SRC_NACE},
 ]
+
+_QUESTION_INFO = {q["question"]: q for q in GENERAL_QUESTION_BANK}
 
 # --- ASSUMPTION - not literature-derived (the SPECIFIC 3 questions and
 #     their fixed order is a researcher/practical design decision, made
@@ -80,12 +160,11 @@ MANDATORY_OPENING_QUESTIONS = [
     "What do you consider your biggest weakness?",
 ]
 
-# Remaining general questions (used only if a session needs MORE general
-# questions beyond the 3 mandatory ones - not used by default with the
-# current NUM_GENERAL_PER_SESSION=0 setting, kept for flexibility).
-OPTIONAL_GENERAL_QUESTIONS = [
-    q for q in GENERAL_QUESTIONS if q not in MANDATORY_OPENING_QUESTIONS
-]
+# Questions asked after the 3 mandatory openers in a General Interview.
+OPTIONAL_GENERAL_QUESTIONS = [q["question"] for q in GENERAL_QUESTION_BANK]
+
+# Kept for compatibility with older code: all general question texts.
+GENERAL_QUESTIONS = MANDATORY_OPENING_QUESTIONS + OPTIONAL_GENERAL_QUESTIONS
 
 # Role-relevant general questions, curated from the Kaggle roles dataset.
 ROLE_GENERAL_QUESTIONS = {
@@ -463,7 +542,13 @@ def get_session_questions(role: str, difficulty: str = "Medium",
     return session
 
 
-def get_next_question(role: str, already_asked: list, difficulty: str = "Medium") -> dict:
+# "General Interview": no job role and no level. After the 3 mandatory
+# opening questions, the rest are drawn from the general (behavioural)
+# question pool only.
+GENERAL_INTERVIEW_ROLE = "General Interview"
+
+
+def get_next_question(role: str, already_asked: list, difficulty: str = "Medium", history=None) -> dict:
     """
     Sequential (one-at-a-time) selector for chat-style interview flows.
 
@@ -482,6 +567,10 @@ def get_next_question(role: str, already_asked: list, difficulty: str = "Medium"
         if mandatory_q not in already_asked:
             return {"type": "general_mandatory", "question": mandatory_q}
 
+    # General Interview: draw from the general question bank only.
+    if role == GENERAL_INTERVIEW_ROLE:
+        return _next_general_question(already_asked, history or {})
+
     # Step 2: mandatory opening done - draw from role-general + technical.
     pool = [{"type": "role_general", "question": q} for q in ROLE_GENERAL_QUESTIONS.get(role, [])]
     if role in TECHNICAL_QUESTIONS:
@@ -494,6 +583,39 @@ def get_next_question(role: str, already_asked: list, difficulty: str = "Medium"
         return {"type": "general", "question": "Is there anything else about your experience you'd like to highlight?"}
 
     return random.choice(remaining)
+
+
+def _next_general_question(already_asked: list, history: dict) -> dict:
+    """
+    Pick the next General Interview question so that a student who
+    practises many times does not keep hearing the same questions:
+      1. never repeat a question within the same session;
+      2. prefer questions this student has NEVER been asked before;
+      3. once every question has been used, pick from the ones used LONGEST
+         ago (least recently used);
+      4. prefer a competency not yet covered in this session, so one
+         session covers different skills.
+    history: {question_text: recency} from the student's EARLIER sessions,
+             where a larger number = asked more recently.
+    """
+    asked = set(already_asked)
+    remaining = [q for q in GENERAL_QUESTION_BANK if q["question"] not in asked]
+    if not remaining:
+        return {"type": "general", "question": "Is there anything else about your experience you'd like to highlight?"}
+
+    unseen = [q for q in remaining if q["question"] not in history]
+    if unseen:
+        pool = unseen
+    else:
+        oldest = min(history[q["question"]] for q in remaining)
+        # all questions used before -> the least recently used ones
+        pool = [q for q in remaining if history[q["question"]] <= oldest + 2]
+
+    used_competencies = {_QUESTION_INFO[t]["competency"] for t in asked if t in _QUESTION_INFO}
+    balanced = [q for q in pool if q["competency"] not in used_competencies]
+    choice = random.choice(balanced or pool)
+    return {"type": "general", "question": choice["question"],
+            "competency": choice["competency"], "source": choice["source"]}
 
 
 if __name__ == "__main__":

@@ -15,8 +15,9 @@ try:
 except Exception:
     mp = None
     mp_face_detection = None
-from app.services.interview_service import continue_interview_session, start_interview_session, end_interview_session
-from app.services.progress_tracker import get_user_progress, get_comparison_options
+from app.services.voice_analysis import confidence_missing_reason
+from app.services.interview_service import continue_interview_session, start_interview_session, end_interview_session, replace_current_question, REPLACED_ANSWER_MARKER, stored_main_score
+from app.services.progress_tracker import get_user_progress, get_comparison_options, get_progress_timeline
 from app.services.istqb_quiz import get_quiz_questions, grade_quiz
 
 router = APIRouter()
@@ -57,7 +58,13 @@ async def chat_interview(
         payload = {
             "sessionId": sessionId,
             "message": message or "",
-            "visualConfidenceScore": form.get("visualConfidenceScore")
+            "visualConfidenceScore": form.get("visualConfidenceScore"),
+            # Focus (voice) interview mode: save the answer now, but let
+            # Gemini check ALL answers together at the end of the interview.
+            "deferEvaluation": form.get("deferEvaluation"),
+            # Browser speech-to-text, used only if the server-side
+            # transcription of the recording fails.
+            "fallbackTranscript": form.get("fallbackTranscript"),
         }
 
     
@@ -72,6 +79,7 @@ async def chat_interview(
     
     return await continue_interview_session(payload, gemini_client, db)
 
+from fastapi.concurrency import run_in_threadpool
 from app.services.visual_analysis import analyze_frame
 
 @router.post("/api/analyze-visual")
@@ -90,7 +98,22 @@ async def analyze_visual(data: dict, db: Session = Depends(get_db), current_user
         
     try:
         # Call the new Visual Analysis Engine
-        analysis_result = analyze_frame(frame_b64, session_id)
+        # analyze_frame() is heavy, blocking CPU work (MediaPipe/OpenCV).
+        # Running it in a worker thread keeps the server's event loop free,
+        # so other requests are not stuck behind it.
+        # Personal "looking at the camera" offset measured in the camera check
+        # (optional - missing if the student skipped the check).
+        gaze_baseline = data.get("gazeBaseline") if isinstance(data.get("gazeBaseline"), dict) else None
+        analysis_result = await run_in_threadpool(analyze_frame, frame_b64, session_id, gaze_baseline)
+
+        # A frame that could not be processed (technical error), or a frame
+        # where nothing could be measured, is NOT a measurement - do not store
+        # it. (Storing it would turn it into 0, because confidence_score has a
+        # database default of 0.0.)
+        if (analysis_result.get("status") == "ERROR"
+                or (analysis_result.get("status") == "FACE_DETECTED"
+                    and analysis_result.get("visual_confidence_score") is None)):
+            return analysis_result
         
         # Save to DB metric history
         # NOTE (BSc Research Feature, Step 2): confidence_score can now be
@@ -100,7 +123,14 @@ async def analyze_visual(data: dict, db: Session = Depends(get_db), current_user
         new_metric = VisualMetric(
             session_id=session_id,
             confidence_score=analysis_result.get("visual_confidence_score"),
-            emotion=analysis_result.get("eye_contact_status", "UNKNOWN")  # Storing status here for compatibility
+            # Status label: eye-contact status, or "NO_FACE" when the face was
+            # not visible (used for the "face not visible" % on the results).
+            emotion=("NO_FACE" if analysis_result.get("status") == "NO_FACE_DETECTED"
+                     else analysis_result.get("eye_contact_status", "UNKNOWN")),
+            # Per-factor scores, used for the Eye Contact / Head Pose
+            # breakdown on the results page.
+            gaze_score=analysis_result.get("gaze_score"),
+            head_stability_score=analysis_result.get("head_stability_score"),
         )
         db.add(new_metric)
         db.commit()
@@ -117,6 +147,48 @@ async def analyze_visual(data: dict, db: Session = Depends(get_db), current_user
             "head_pose_status": "UNKNOWN",
             "warning_message": str(e)
         }
+
+# --- ASSUMPTION - not literature-derived --- minimum Head Pose score (0-100)
+# for the camera test to count the student as "facing the camera" (75 = head
+# turned at most about 15 deg; see HEAD_* angles in visual_analysis.py).
+DEVICE_TEST_MIN_HEAD_SCORE = 75
+
+
+# Pre-interview camera test: checks whether the face can be seen well enough
+# for the interview detectors. Nothing is stored (there is no interview
+# session yet) - it only tells the test page what the detector sees.
+@router.post("/api/check-face")
+async def check_face(data: dict, current_user: User = Depends(get_current_user)):
+    frame_b64 = data.get("image_base64") or data.get("frame")
+    if not frame_b64:
+        return {"status": "ERROR", "warning_message": "No frame provided"}
+    result = await run_in_threadpool(analyze_frame, frame_b64, "device-test")
+    # "Ready" = the main detector (MediaPipe) found the face, could measure the
+    # head angle, and the student is roughly facing the camera. A face found
+    # only by the weaker fallback detector usually means poor lighting or
+    # framing, so it does not count as ready.
+    head = result.get("head_stability_score")
+    if result.get("status") != "FACE_DETECTED":
+        reason = "TOO_DARK" if "dark" in (result.get("warning_message") or "").lower() else "NO_FACE"
+    elif head is None:
+        reason = "FACE_UNCLEAR"
+    elif head < DEVICE_TEST_MIN_HEAD_SCORE:
+        reason = "NOT_FACING_CAMERA"
+    else:
+        reason = "OK"
+    result["ready"] = reason == "OK"
+    result["reason"] = reason
+    return result
+
+
+# Focus interview: the student's face was not visible for 30 s in a row
+# after a question was asked -> drop that question and give a new one.
+@router.post("/api/replace-question")
+async def replace_question(data: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    if data.get("sessionId"):
+        get_owned_session(db, data["sessionId"], current_user)
+    return await replace_current_question(data, db)
+
 
 @router.get("/api/audio-file/{response_id}")
 async def get_audio_file(response_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -165,7 +237,9 @@ async def get_interview_history(user_id: int, db: Session = Depends(get_db), cur
             "role": s.role,
             "difficulty": s.difficulty,
             "interviewMode": s.interview_mode,
-            "overallScore": s.overall_score,
+            # Main (confidence) score; None for sessions scored with the
+            # older formula (see stored_main_score).
+            "overallScore": stored_main_score(s),
             "confidenceLevel": confidence_level,
             "status": s.status,
             "createdAt": s.created_at
@@ -178,7 +252,8 @@ async def get_interview_session_details(session_id: str, db: Session = Depends(g
         
     responses = db.query(InterviewResponse).filter(
         InterviewResponse.session_id == session_id,
-        InterviewResponse.user_answer != None
+        InterviewResponse.user_answer != None,
+        InterviewResponse.user_answer != REPLACED_ANSWER_MARKER,
     ).order_by(InterviewResponse.id.asc()).all()
     
     # --- BUG FIX (consistency with end_interview_session, Function 5
@@ -213,6 +288,12 @@ async def get_interview_session_details(session_id: str, db: Session = Depends(g
     # as "N/A" by the frontend.
     visual_score = None
     vocal_score = None
+    visual_breakdown = None
+    vocal_breakdown = None
+    replaced_questions = 0
+    ai_models = None
+    confidence_score = None
+    scoring_version = 1
     confidence_level = "NOT_AVAILABLE"
     if session.summary_feedback:
         try:
@@ -222,14 +303,38 @@ async def get_interview_session_details(session_id: str, db: Session = Depends(g
             textual_score = summary_dict.get("textualScore", textual_score)
             visual_score = summary_dict.get("visualScore", visual_score)
             vocal_score = summary_dict.get("vocalScore", vocal_score)
+            visual_breakdown = summary_dict.get("visualBreakdown", visual_breakdown)
+            vocal_breakdown = summary_dict.get("vocalBreakdown", vocal_breakdown)
+            replaced_questions = summary_dict.get("replacedQuestions", 0)
+            ai_models = summary_dict.get("aiModels")
+            confidence_score = summary_dict.get("confidenceScore")
+            scoring_version = summary_dict.get("scoringVersion", 1)
             confidence_level = summary_dict.get("confidenceLevel", confidence_level)
         except Exception:
             overall_strengths = session.summary_feedback
-        
+
+    # Confidence Score needs BOTH camera and voice. Sessions saved earlier
+    # with a camera-only (or voice-only) score are shown as N/A.
+    is_text_mode = bool(session.interview_mode and session.interview_mode.upper() == "TEXT")
+    confidence_note = None
+    if not is_text_mode and scoring_version >= 2:
+        if visual_score is None or vocal_score is None:
+            confidence_score = None
+            confidence_level = "NOT_AVAILABLE"
+        confidence_note = confidence_missing_reason(visual_score, vocal_score)
+    main_score = stored_main_score(session)
+
     return {
         "success": True,
         "results": {
-            "overallScore": session.overall_score,
+            "overallScore": main_score,
+            # Older sessions: their old overall score (60% answer + 20% visual
+            # + 20% vocal), shown separately so it is not mistaken for a
+            # confidence score.
+            "legacyOverallScore": session.overall_score if (main_score is None and scoring_version < 2 and not is_text_mode) else None,
+            "confidenceScore": confidence_score,
+            "confidenceMissingReason": confidence_note,
+            "scoringVersion": scoring_version,
             "overallStrengths": overall_strengths,
             "keyImprovements": key_improvements,
             "evaluations": evaluations,
@@ -237,6 +342,11 @@ async def get_interview_session_details(session_id: str, db: Session = Depends(g
             "textualScore": textual_score,
             "visualScore": visual_score,
             "vocalScore": vocal_score,
+            "visualBreakdown": visual_breakdown,
+            "vocalBreakdown": vocal_breakdown,
+            "replacedQuestions": replaced_questions,
+            "aiModels": ai_models,
+            "sessionId": session.session_id,
             "confidenceLevel": confidence_level,
             # --- BSc Research Feature (Function 5, Suggestion #2/#4):
             # session context, consistent with the immediate
@@ -300,6 +410,18 @@ async def get_progress_options(user_id: int, db: Session = Depends(get_db), curr
         return {"success": True, **result}
     except Exception as e:
         print(f"❌ Error in get-progress-options: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# Progress page: every completed session with its overall score and the 5
+# confidence-factor scores, for the time chart and the history cards.
+@router.get("/api/progress-timeline/{user_id}")
+async def get_progress_timeline_route(user_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_same_user(user_id, current_user)
+    try:
+        return {"success": True, **get_progress_timeline(db, user_id)}
+    except Exception as e:
+        print(f"❌ Error in get-progress-timeline: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
 
 

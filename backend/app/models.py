@@ -101,6 +101,13 @@ class InterviewResponse(Base):
     filler_word_count = Column(Integer, nullable=True)
     long_pause_count = Column(Integer, nullable=True)
     pitch_variation = Column(Float, nullable=True)
+    # Used by the vocal scores (see voice_analysis.py / VOCAL_SCORING.md):
+    # answer time (first to last sound), time spent in long pauses (>= 3 s),
+    # and the pitch variation quotient (SD / mean of pitch). None for answers
+    # recorded before this scoring existed.
+    speech_seconds = Column(Float, nullable=True)
+    long_pause_seconds = Column(Float, nullable=True)
+    pitch_pvq = Column(Float, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     session = relationship("InterviewSession", back_populates="responses")
@@ -112,6 +119,11 @@ class VisualMetric(Base):
     session_id = Column(String(255), ForeignKey("interview_sessions.session_id", ondelete="CASCADE"), nullable=False)
     confidence_score = Column(Float, default=0.0)
     emotion = Column(String(50), nullable=True)
+    # Per-factor scores for this frame (0-100), so the results page can show
+    # Eye Contact and Head Pose separately. Nullable: frames with no face,
+    # and rows saved before these columns existed, have no value.
+    gaze_score = Column(Float, nullable=True)
+    head_stability_score = Column(Float, nullable=True)
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
     
     session = relationship("InterviewSession")

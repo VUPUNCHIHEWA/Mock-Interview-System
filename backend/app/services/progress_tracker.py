@@ -115,9 +115,12 @@ def compare_sessions(session_old, session_new) -> dict:
     old_summary = _parse_summary(session_old)
     new_summary = _parse_summary(session_new)
 
-    old_overall = session_old.overall_score or 0
-    new_overall = session_new.overall_score or 0
-    overall_change = new_overall - old_overall
+    # Main score = Confidence Score (needs BOTH camera and voice). A session
+    # without one has no main score (None) - it is never counted as 0.
+    from app.services.interview_service import stored_main_score
+    old_overall = stored_main_score(session_old)
+    new_overall = stored_main_score(session_new)
+    overall_change = (new_overall - old_overall) if (old_overall is not None and new_overall is not None) else None
 
     old_visual = old_summary.get("visualScore")
     new_visual = new_summary.get("visualScore")
@@ -189,7 +192,7 @@ def compare_sessions(session_old, session_new) -> dict:
         "context_consistent": context_consistent,
         "context_warning": context_warning,
         "overall_score_change": overall_change,
-        "overall_score_trend": _direction(overall_change, higher_is_better=True),
+        "overall_score_trend": _direction(overall_change, higher_is_better=True) if overall_change is not None else "No data",
         "visual_score_change": visual_change,
         "visual_score_trend": _direction(visual_change, higher_is_better=True) if visual_change is not None else "No data",
         "vocal_score_change": vocal_change,
@@ -409,6 +412,7 @@ def get_user_progress(db, user_id: int, role: str = None, difficulty: str = None
     messages = generate_progress_message(comparison)
     focus_area = generate_focus_area(comparison)
 
+    from app.services.interview_service import stored_main_score
     all_sessions = []
     for s in completed_sessions:
         summary = _parse_summary(s)
@@ -418,7 +422,7 @@ def get_user_progress(db, user_id: int, role: str = None, difficulty: str = None
             "role": s.role,
             "difficulty": s.difficulty,
             "interview_mode": s.interview_mode,
-            "overall_score": s.overall_score,
+            "overall_score": stored_main_score(s),
             "confidence_level": summary.get("confidenceLevel", "NOT_AVAILABLE"),
             "is_in_comparison_group": s in matched_sessions,
         })
@@ -476,8 +480,9 @@ def get_research_summary(db) -> dict:
             counts[trend] = counts.get(trend, 0) + 1
         return counts
 
-    overall_changes = [c["overall_score_change"] for c in per_user_comparisons]
-    avg_overall_change = round(sum(overall_changes) / len(overall_changes), 1)
+    overall_changes = [c["overall_score_change"] for c in per_user_comparisons
+                       if c["overall_score_change"] is not None]
+    avg_overall_change = round(sum(overall_changes) / len(overall_changes), 1) if overall_changes else None
 
     return {
         "available": True,
@@ -491,3 +496,105 @@ def get_research_summary(db) -> dict:
             {"user_id": uid, **comp} for uid, comp in zip(eligible_users, per_user_comparisons)
         ],
     }
+
+# ---------------------------------------------------------------------------
+# Progress timeline (Progress page chart + history cards)
+# ---------------------------------------------------------------------------
+# Returns EVERY completed session of a user, oldest first, with the overall
+# score and the 5 confidence-factor scores (Eye Contact, Head Pose, Filler
+# Words, Long Pauses, Pitch Variation) as 0-100%. The frontend draws the
+# time chart (24h / 7d / 30d / 90d / 1y / All) and the history cards from it.
+#
+# Factor scores are re-calculated from the stored raw data, so older
+# sessions get them too where the raw data exists:
+#   - Vocal factors: from the per-answer filler count, answer time,
+#     long-pause time and pitch variation quotient, using the SAME function
+#     as the results page (compute_session_vocal). Answers recorded before
+#     these were stored have no vocal factors (N/A).
+#   - Visual factors: from the per-frame gaze / head-stability scores
+#     (only stored for sessions recorded after that feature was added).
+# A factor with no real data is None ("N/A") - never a made-up value.
+
+def get_progress_timeline(db, user_id: int) -> dict:
+    from sqlalchemy import func
+    from app.models import InterviewSession, InterviewResponse, VisualMetric
+    from app.services.voice_analysis import compute_session_vocal
+    from app.services.interview_service import stored_main_score
+
+    sessions = (
+        db.query(InterviewSession)
+        .filter(InterviewSession.user_id == user_id, InterviewSession.status == "Completed")
+        .order_by(InterviewSession.created_at.asc())
+        .all()
+    )
+    session_ids = [s.session_id for s in sessions]
+    if not session_ids:
+        return {"sessions": []}
+
+    # Per-session averages of the per-frame visual factor scores.
+    visual_rows = (
+        db.query(
+            VisualMetric.session_id,
+            func.avg(VisualMetric.gaze_score),
+            func.avg(VisualMetric.head_stability_score),
+        )
+        .filter(VisualMetric.session_id.in_(session_ids))
+        .group_by(VisualMetric.session_id)
+        .all()
+    )
+    visual_by_session = {sid: (gaze, head) for sid, gaze, head in visual_rows}
+
+    # Per-answer voice metrics (same answers the results page uses: those
+    # that have voice data), grouped by session.
+    vocal_rows = (
+        db.query(InterviewResponse)
+        .filter(
+            InterviewResponse.session_id.in_(session_ids),
+            InterviewResponse.filler_word_count.isnot(None),
+        )
+        .all()
+    )
+    vocal_by_session = {}
+    for r in vocal_rows:
+        vocal_by_session.setdefault(r.session_id, []).append(r)
+
+    def _round(v):
+        return round(float(v), 1) if v is not None else None
+
+    timeline = []
+    for s in sessions:
+        summary = _parse_summary(s)
+
+        gaze, head = visual_by_session.get(s.session_id, (None, None))
+        factors = {
+            "eyeContact": _round(gaze),
+            "headPose": _round(head),
+            "fillerWords": None,
+            "longPauses": None,
+            "pitchVariation": None,
+        }
+        vocal_raw = {}
+        breakdown = compute_session_vocal(vocal_by_session.get(s.session_id, []))["vocalBreakdown"]
+        if breakdown:
+            for key in ("fillerWords", "longPauses", "pitchVariation"):
+                factors[key] = breakdown[key]["score"]
+                vocal_raw[key] = breakdown[key]["value"]
+
+        timeline.append({
+            "session_id": s.session_id,
+            "date": s.created_at.isoformat() if s.created_at else None,
+            "role": s.role,
+            "difficulty": s.difficulty,
+            "interview_mode": s.interview_mode,
+            # Main score = confidence score; None for sessions scored with
+            # the older 60/20/20 formula (not comparable).
+            "overall_score": _round(stored_main_score(s)),
+            "textual_score": summary.get("textualScore"),
+            "visual_score": summary.get("visualScore"),
+            "vocal_score": summary.get("vocalScore"),
+            "confidence_level": summary.get("confidenceLevel", "NOT_AVAILABLE"),
+            "factors": factors,
+            "vocal_raw": vocal_raw,
+        })
+
+    return {"sessions": timeline}

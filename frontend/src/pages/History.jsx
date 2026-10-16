@@ -77,12 +77,17 @@ const History = () => {
     // circle. Now explicitly shows "..." with a neutral color instead of
     // fabricating or blank-rendering a score that doesn't exist yet.
     const getScoreCircleStyle = (session) => {
-        if (session.status !== 'Completed' || session.overallScore === null || session.overallScore === undefined) {
+        if (session.status !== 'Completed') {
             return { display: '...', color: 'bg-slate-300' };
+        }
+        // Completed but no Confidence Score: an older interview scored with
+        // the previous formula (not comparable), or no camera/voice data.
+        if (session.overallScore === null || session.overallScore === undefined) {
+            return { display: 'N/A', color: 'bg-slate-300' };
         }
         const score = session.overallScore;
         return {
-            display: score,
+            display: Math.round(score),
             color: score >= 80 ? 'bg-green-500' : score >= 60 ? 'bg-orange-500' : 'bg-red-500',
         };
     };
@@ -137,7 +142,7 @@ const History = () => {
                                             )}
                                         </div>
                                         <p className="text-xs text-slate-500 font-medium uppercase tracking-widest mt-1">
-                                            {new Date(session.createdAt).toLocaleDateString()} • {session.interviewMode} Mode • {session.difficulty}
+                                            {new Date(session.createdAt).toLocaleDateString()} • {session.interviewMode} Mode{session.difficulty ? ` • ${session.difficulty}` : ''}
                                         </p>
                                     </div>
                                 </div>

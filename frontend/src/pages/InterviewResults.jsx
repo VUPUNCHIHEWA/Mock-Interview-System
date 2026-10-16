@@ -4,13 +4,36 @@ import { CircularProgressbar, buildStyles } from 'react-circular-progressbar';
 import 'react-circular-progressbar/dist/styles.css';
 import { LayoutDashboard, Target, CheckCircle, TrendingUp, AlertCircle, ChevronDown, ChevronUp, GraduationCap, ExternalLink, ClipboardCheck } from 'lucide-react';
 import { useState } from 'react';
+import axios from 'axios';
 
 const InterviewResults = () => {
     const location = useLocation();
     const navigate = useNavigate();
-    const { results } = location.state || {};
+    const [results, setResults] = useState((location.state || {}).results);
+    const [reEvaluating, setReEvaluating] = useState(false);
+    const [reEvalError, setReEvalError] = useState(null);
 
     const [expandedQ, setExpandedQ] = useState(null);
+
+    // "Evaluate now": if the AI service was busy / over its limit, some answers
+    // are "Not Evaluated". This asks the backend to check them again (all the
+    // saved answers and camera/voice scores are kept) and refreshes the page.
+    const reEvaluate = async () => {
+        if (!results?.sessionId) return;
+        setReEvaluating(true);
+        setReEvalError(null);
+        try {
+            const response = await axios.post("http://localhost:8000/api/end-interview", { sessionId: results.sessionId });
+            if (response.data.success) setResults(response.data);
+            const stillPending = (response.data.evaluations || []).some(e => e.isNotEvaluated);
+            if (stillPending) setReEvalError("The AI service is still busy. Please try again a little later.");
+        } catch (err) {
+            console.error("Re-evaluation failed:", err);
+            setReEvalError("Could not reach the server. Please try again.");
+        } finally {
+            setReEvaluating(false);
+        }
+    };
 
     if (!results) {
         return (
@@ -44,12 +67,65 @@ const InterviewResults = () => {
     const textualScore = results.textualScore;
     const visualScore = results.visualScore;
     const vocalScore = results.vocalScore;
+    // Per-factor breakdown (null for older sessions saved before this
+    // feature, or when there was no camera / voice data).
+    const visualBreakdown = results.visualBreakdown;
+    const vocalBreakdown = results.vocalBreakdown;
+
+    const hasValue = (v) => v !== null && v !== undefined;
+
+    // Sub-factor rows shown under Visual Confidence and Vocal Delivery.
+    const visualFactors = visualBreakdown ? [
+        { label: 'Eye Contact', score: visualBreakdown.eyeContact, detail: 'Looking at the camera' },
+        { label: 'Head Pose', score: visualBreakdown.headPose, detail: 'Head facing forward and steady' },
+    ] : [];
+    // New scoring (per minute / % of answer time / PVQ) has a "unit" field;
+    // older sessions keep their old wording.
+    const isNewVocal = !!vocalBreakdown?.fillerWords?.unit;
+    const vocalFactors = vocalBreakdown ? [
+        {
+            label: 'Filler Words', score: vocalBreakdown.fillerWords?.score,
+            detail: !hasValue(vocalBreakdown.fillerWords?.value) ? null : isNewVocal
+                ? `${vocalBreakdown.fillerWords.value} per minute (100% at ${vocalBreakdown.fillerWords.fullMarksAtOrBelow} or fewer, 0% at ${vocalBreakdown.fillerWords.zeroAtOrAbove} or more)`
+                : `Avg ${vocalBreakdown.fillerWords.value} per answer (older scoring)`
+        },
+        {
+            label: 'Long Pauses', score: vocalBreakdown.longPauses?.score,
+            detail: !hasValue(vocalBreakdown.longPauses?.value) ? null : isNewVocal
+                ? `${vocalBreakdown.longPauses.value}% of answer time in pauses of ${vocalBreakdown.longPauses.minPauseSeconds}s or longer`
+                : `Avg ${vocalBreakdown.longPauses.value} long pauses per answer (older scoring)`
+        },
+        {
+            label: 'Pitch Variation', score: vocalBreakdown.pitchVariation?.score,
+            detail: !hasValue(vocalBreakdown.pitchVariation?.value) ? null : isNewVocal
+                ? `Variation ${Math.round(vocalBreakdown.pitchVariation.value * 100)}% of your average pitch (100% at ${Math.round(vocalBreakdown.pitchVariation.fullMarksAtOrAbove * 100)}% or more)`
+                : `${vocalBreakdown.pitchVariation.value} Hz (older scoring)`
+        },
+    ] : [];
+
+    // The weakest factor (below 80%) - shown as a direct "focus on this" tip.
+    const weakestFactor = [...visualFactors, ...vocalFactors]
+        .filter(f => hasValue(f.score) && f.score < 80)
+        .sort((a, b) => a.score - b.score)[0];
 
     const getScoreColor = (score) => {
         if (score >= 80) return '#4ade80';
         if (score >= 60) return '#fb923c';
         return '#f87171';
     };
+
+    const FactorBar = ({ label, score, detail }) => (
+        <div className="pl-3 border-l-2 border-slate-100">
+            <div className="flex justify-between text-[10px] font-semibold mb-1 text-slate-400">
+                <span>{label}</span>
+                <span className="text-slate-600 font-bold">{hasValue(score) ? `${Math.round(score)}%` : 'N/A'}</span>
+            </div>
+            <div className="h-1 w-full bg-slate-100 rounded-full overflow-hidden">
+                <div className="h-full transition-all duration-1000" style={{ width: `${score ?? 0}%`, backgroundColor: getScoreColor(score ?? 0) }}></div>
+            </div>
+            {detail && <p className="text-[9px] text-slate-400 mt-0.5">{detail}</p>}
+        </div>
+    );
 
     const getConfidenceBadgeStyle = (level) => {
         if (level === 'High Confidence') {
@@ -100,16 +176,36 @@ const InterviewResults = () => {
                     )}
                 </div>
 
+                {/* Some answers could not be checked (AI service busy / over its limit). */}
+                {(evaluations || []).some(e => e.isNotEvaluated) && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-col sm:flex-row items-center gap-3 justify-between">
+                        <p className="text-xs font-semibold text-amber-800">
+                            ⏳ {(evaluations || []).filter(e => e.isNotEvaluated).length} answer(s) could not be checked yet because the AI service was busy.
+                            Your answers and camera/voice scores are saved, and your Confidence Score is already final (it does not depend on this check).
+                            {reEvalError && <span className="block mt-1 text-red-600">{reEvalError}</span>}
+                        </p>
+                        {results.sessionId && (
+                            <button
+                                onClick={reEvaluate}
+                                disabled={reEvaluating}
+                                className="shrink-0 bg-amber-500 hover:bg-amber-600 text-white px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-60"
+                            >
+                                {reEvaluating ? 'Checking...' : 'Evaluate now'}
+                            </button>
+                        )}
+                    </div>
+                )}
+
                 <div className="grid grid-cols-1 md:grid-cols-12 gap-8">
 
                     <div className="md:col-span-4 bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm flex flex-col items-center justify-center text-center">
-                        <h3 className="text-xs font-black uppercase tracking-widest text-slate-400 mb-6">{isTextMode ? 'Textual Score' : 'Overall Performance Score'}</h3>
+                        <h3 className="text-xs font-black uppercase tracking-widest text-slate-400 mb-6">{isTextMode ? 'Textual Score' : 'Confidence Score'}</h3>
                         <div className="w-40 h-40 mb-6">
                             <CircularProgressbar
-                                value={overallScore}
-                                text={`${overallScore}%`}
+                                value={overallScore ?? 0}
+                                text={overallScore !== null && overallScore !== undefined ? `${overallScore}%` : '—'}
                                 styles={buildStyles({
-                                    pathColor: getScoreColor(overallScore),
+                                    pathColor: getScoreColor(overallScore ?? 0),
                                     textColor: '#0f172a',
                                     trailColor: '#f1f5f9',
                                     textSize: '24px'
@@ -118,17 +214,24 @@ const InterviewResults = () => {
                             />
                         </div>
 
+                        {!isTextMode && hasValue(results.legacyOverallScore) && (
+                            <p className="text-[10px] text-slate-400 font-medium -mt-2 mb-2">
+                                Older interview: scored with the previous formula (60% answers + 20% camera + 20% voice) = {results.legacyOverallScore}%. Not comparable with the Confidence Score.
+                            </p>
+                        )}
+                        {!isTextMode && (
+                            <p className="text-[10px] text-slate-400 font-medium -mt-2 mb-2">
+                                Average of Visual Confidence and Vocal Delivery (both are needed).
+                            </p>
+                        )}
+                        {!isTextMode && !hasValue(overallScore) && results.confidenceMissingReason && (
+                            <p className="text-[10px] text-amber-600 font-semibold mb-2">
+                                {results.confidenceMissingReason}
+                            </p>
+                        )}
+
                         {!isTextMode && (
                             <div className="w-full space-y-3 mt-4 text-left">
-                                <div>
-                                    <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest mb-1 text-slate-500">
-                                        <span>📝 Textual Accuracy</span>
-                                        <span className="text-slate-700">{textualScore !== null && textualScore !== undefined ? `${textualScore}%` : 'N/A'}</span>
-                                    </div>
-                                    <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
-                                        <div className="h-full transition-all duration-1000" style={{ width: `${textualScore ?? 0}%`, backgroundColor: getScoreColor(textualScore ?? 0) }}></div>
-                                    </div>
-                                </div>
                                 <div>
                                     <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest mb-1 text-slate-500">
                                         <span>🎥 Visual Confidence</span>
@@ -137,6 +240,16 @@ const InterviewResults = () => {
                                     <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
                                         <div className="h-full transition-all duration-1000" style={{ width: `${visualScore ?? 0}%`, backgroundColor: getScoreColor(visualScore ?? 0) }}></div>
                                     </div>
+                                    {visualFactors.length > 0 && (
+                                        <div className="mt-2 space-y-2">
+                                            {visualFactors.map(f => <FactorBar key={f.label} {...f} />)}
+                                            {hasValue(visualBreakdown?.faceNotVisiblePct) && visualBreakdown.faceNotVisiblePct > 0 && (
+                                                <p className="pl-3 text-[9px] font-semibold text-orange-500">
+                                                    ⚠️ Face not visible for {Math.round(visualBreakdown.faceNotVisiblePct)}% of the measured time (counted as 0).
+                                                </p>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                                 <div>
                                     <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest mb-1 text-slate-500">
@@ -146,6 +259,35 @@ const InterviewResults = () => {
                                     <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
                                         <div className="h-full transition-all duration-1000" style={{ width: `${vocalScore ?? 0}%`, backgroundColor: getScoreColor(vocalScore ?? 0) }}></div>
                                     </div>
+                                    {vocalFactors.length > 0 && (
+                                        <div className="mt-2 space-y-2">
+                                            {vocalFactors.map(f => <FactorBar key={f.label} {...f} />)}
+                                        </div>
+                                    )}
+                                </div>
+
+                                {results.replacedQuestions > 0 && (
+                                    <div className="mt-3 p-2.5 rounded-xl bg-amber-50 border border-amber-100 text-[10px] text-amber-700 font-semibold">
+                                        🔁 {results.replacedQuestions} question{results.replacedQuestions > 1 ? 's were' : ' was'} replaced because your face was not detected for 30 seconds.
+                                    </div>
+                                )}
+
+                                {weakestFactor && (
+                                    <div className="mt-3 p-2.5 rounded-xl bg-red-50 border border-red-100 text-[10px] text-red-700 font-semibold">
+                                        🎯 Focus on improving: <span className="font-black">{weakestFactor.label}</span> ({Math.round(weakestFactor.score)}%)
+                                    </div>
+                                )}
+
+                                {/* Answer score: shown separately - NOT part of the Confidence Score. */}
+                                <div className="mt-4 pt-4 border-t border-slate-100">
+                                    <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest mb-1 text-slate-500">
+                                        <span>📝 Answer Score</span>
+                                        <span className="text-slate-700">{hasValue(textualScore) ? `${textualScore}%` : (evaluations || []).some(e => e.isNotEvaluated) ? 'Pending' : 'N/A'}</span>
+                                    </div>
+                                    <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                                        <div className="h-full transition-all duration-1000" style={{ width: `${textualScore ?? 0}%`, backgroundColor: getScoreColor(textualScore ?? 0) }}></div>
+                                    </div>
+                                    <p className="text-[9px] text-slate-400 mt-0.5">Content of your answers, checked by AI. Shown separately - not part of the Confidence Score.</p>
                                 </div>
 
                                 {confidenceLevel && confidenceLevel !== 'NOT_AVAILABLE' && (

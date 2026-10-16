@@ -1,9 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import axios from 'axios';
+import FocusInterviewSession from './FocusInterviewSession';
 import { Camera, Mic, Send, AlertTriangle, CheckCircle, User, Bot, Loader2, ChevronDown, ChevronUp, StopCircle, PartyPopper, SkipForward, RotateCcw, Play } from 'lucide-react';
 
-const InterviewSession = () => {
+// Classic chat-style interview screen - now used for TEXT mode only.
+// Voice + camera (MULTIMODAL) interviews use the distraction-free,
+// keyboard-controlled FocusInterviewSession screen instead (see bottom).
+const ClassicInterviewSession = () => {
     const location = useLocation();
     const navigate = useNavigate();
 
@@ -98,7 +102,17 @@ const InterviewSession = () => {
         return `${mins}:${secs}`;
     };
 
-    const captureVisualFrame = () => {
+    // Gap (ms) between one frame's result arriving and the next frame being
+    // sent. The next frame is only sent AFTER the previous result comes
+    // back, so requests can never pile up in a queue (the old fixed
+    // 2500 ms setInterval did not wait, which built a backlog and made the
+    // bar show results ~15 s late).
+    const VISUAL_CAPTURE_GAP_MS = 1000;
+
+    // Returns a promise that settles when this frame's analysis is done.
+    // isCancelled() lets a late response be ignored after the camera was
+    // turned off or the session ended.
+    const captureVisualFrame = (isCancelled = () => false) => {
         if (videoRef.current && canvasRef.current && isCameraOn) {
             const video = videoRef.current;
             const canvas = canvasRef.current;
@@ -110,10 +124,11 @@ const InterviewSession = () => {
 
             const base64Frame = canvas.toDataURL('image/jpeg', 0.6);
 
-            axios.post("http://localhost:8000/api/analyze-visual", {
+            return axios.post("http://localhost:8000/api/analyze-visual", {
                 sessionId: sessionId,
                 image_base64: base64Frame
             }).then(response => {
+                if (isCancelled()) return;
                 const data = response.data;
                 if (data.status && data.status !== "ERROR" && data.status !== "SKIPPED") {
                     setVisualMetrics({
@@ -134,16 +149,32 @@ const InterviewSession = () => {
                 }
             }).catch(err => console.error("Visual API Error:", err));
         }
+        return Promise.resolve();
     };
 
     useEffect(() => {
-        if (isCameraOn && interviewMode === "MULTIMODAL" && !sessionComplete) {
-            captureIntervalRef.current = setInterval(captureVisualFrame, 2500);
-        } else {
-            if (captureIntervalRef.current) clearInterval(captureIntervalRef.current);
+        if (!(isCameraOn && interviewMode === "MULTIMODAL" && !sessionComplete)) {
+            if (captureIntervalRef.current) clearTimeout(captureIntervalRef.current);
+            return;
         }
+
+        let cancelled = false;
+        const isCancelled = () => cancelled;
+
+        // Self-scheduling loop: send one frame, wait for its result, then
+        // wait VISUAL_CAPTURE_GAP_MS before sending the next one.
+        const loop = async () => {
+            if (cancelled) return;
+            await captureVisualFrame(isCancelled);
+            if (!cancelled) {
+                captureIntervalRef.current = setTimeout(loop, VISUAL_CAPTURE_GAP_MS);
+            }
+        };
+        captureIntervalRef.current = setTimeout(loop, VISUAL_CAPTURE_GAP_MS);
+
         return () => {
-            if (captureIntervalRef.current) clearInterval(captureIntervalRef.current);
+            cancelled = true;
+            if (captureIntervalRef.current) clearTimeout(captureIntervalRef.current);
         };
     }, [isCameraOn, interviewMode, sessionComplete]);
 
@@ -812,6 +843,12 @@ const InterviewSession = () => {
             </div>
         </div>
     );
+};
+
+const InterviewSession = () => {
+    const location = useLocation();
+    const interviewMode = (location.state && location.state.interviewMode) || "MULTIMODAL";
+    return interviewMode === "MULTIMODAL" ? <FocusInterviewSession /> : <ClassicInterviewSession />;
 };
 
 export default InterviewSession;
