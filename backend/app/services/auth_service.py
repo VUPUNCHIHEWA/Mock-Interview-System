@@ -6,8 +6,21 @@ from app.core.security import create_access_token, hash_password, verify_passwor
 from app.services.email_service import send_otp_email
 from app.services.otp_service import generate_otp
 
+# Minimum password length for new accounts (UI redesign, 2026-10-17).
+# Must match MIN_PASSWORD_LENGTH in frontend/src/pages/Signup.jsx.
+# Only checked at sign up, so existing accounts can still log in.
+MIN_PASSWORD_LENGTH = 8
+
 
 async def signup_user(data, db: Session):
+    if not data.name or not data.name.strip():
+        raise HTTPException(status_code=400, detail="Please enter your full name.")
+    if len(data.password or "") < MIN_PASSWORD_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters.",
+        )
+
     existing = db.query(models.User).filter(models.User.email == data.email).first()
 
     if existing:

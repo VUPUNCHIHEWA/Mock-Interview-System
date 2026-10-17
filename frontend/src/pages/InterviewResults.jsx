@@ -2,7 +2,7 @@ import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { CircularProgressbar, buildStyles } from 'react-circular-progressbar';
 import 'react-circular-progressbar/dist/styles.css';
-import { LayoutDashboard, Target, CheckCircle, TrendingUp, AlertCircle, ChevronDown, ChevronUp, GraduationCap, ExternalLink, ClipboardCheck } from 'lucide-react';
+import { LayoutDashboard, Target, CheckCircle, TrendingUp, AlertCircle, ChevronDown, ChevronUp, GraduationCap, ExternalLink, ClipboardCheck, Lightbulb, Eye, Mic } from 'lucide-react';
 import { useState } from 'react';
 import axios from 'axios';
 
@@ -81,14 +81,26 @@ const InterviewResults = () => {
     ] : [];
     // New scoring (per minute / % of answer time / PVQ) has a "unit" field;
     // older sessions keep their old wording.
-    const isNewVocal = !!vocalBreakdown?.fillerWords?.unit;
+    const isNewVocal = !!(vocalBreakdown?.speechRate?.unit || vocalBreakdown?.fillerWords?.unit);
+    // First vocal factor: Speech Rate (SPEECH_RATE_SCORING.md). Sessions saved
+    // before 2026-10-16 have Filler Words instead and keep their old wording.
+    const sr = vocalBreakdown?.speechRate;
+    const fw = vocalBreakdown?.fillerWords;
+    const firstVocalFactor = sr
+        ? {
+            label: 'Speech Rate', score: sr.score,
+            detail: sr.enoughSpeech === false
+                ? `Not enough speech to score (${sr.speakingSeconds} s of speaking, needs ${sr.minSpeakingSeconds} s).`
+                : hasValue(sr.value) ? `${sr.value} words per minute · ${sr.label}: ${sr.labelText}` : null
+        }
+        : {
+            label: 'Filler Words (older scoring)', score: fw?.score,
+            detail: !hasValue(fw?.value) ? null : fw.unit
+                ? `${fw.value} per minute (100% at ${fw.fullMarksAtOrBelow} or fewer, 0% at ${fw.zeroAtOrAbove} or more)`
+                : `Avg ${fw.value} per answer (older scoring)`
+        };
     const vocalFactors = vocalBreakdown ? [
-        {
-            label: 'Filler Words', score: vocalBreakdown.fillerWords?.score,
-            detail: !hasValue(vocalBreakdown.fillerWords?.value) ? null : isNewVocal
-                ? `${vocalBreakdown.fillerWords.value} per minute (100% at ${vocalBreakdown.fillerWords.fullMarksAtOrBelow} or fewer, 0% at ${vocalBreakdown.fillerWords.zeroAtOrAbove} or more)`
-                : `Avg ${vocalBreakdown.fillerWords.value} per answer (older scoring)`
-        },
+        firstVocalFactor,
         {
             label: 'Long Pauses', score: vocalBreakdown.longPauses?.score,
             detail: !hasValue(vocalBreakdown.longPauses?.value) ? null : isNewVocal
@@ -103,10 +115,15 @@ const InterviewResults = () => {
         },
     ] : [];
 
-    // The weakest factor (below 80%) - shown as a direct "focus on this" tip.
-    const weakestFactor = [...visualFactors, ...vocalFactors]
-        .filter(f => hasValue(f.score) && f.score < 80)
-        .sort((a, b) => a.score - b.score)[0];
+    // Confidence feedback (voice/camera interviews): each item is an object
+    // built from the measured factors (confidence_feedback.py). Older or
+    // text-only sessions may still have plain strings - both are shown.
+    const toList = (v) => Array.isArray(v) ? v : (v ? [v] : []);
+    const strengthItems = toList(overallStrengths);
+    const improvementItems = toList(keyImprovements);
+    // Plain-text points in a camera/voice report = an older AI summary (saved
+    // before confidence-only feedback, or the backend is still the old code).
+    const isOldFeedbackFormat = !isTextMode && [...strengthItems, ...improvementItems].some(i => typeof i === 'string');
 
     const getScoreColor = (score) => {
         if (score >= 80) return '#4ade80';
@@ -126,6 +143,45 @@ const InterviewResults = () => {
             {detail && <p className="text-[9px] text-slate-400 mt-0.5">{detail}</p>}
         </div>
     );
+
+    const noFeedbackText = isTextMode
+        ? 'No feedback available.'
+        : 'No camera or voice measurements were recorded, so confidence feedback cannot be given.';
+
+    // One strength / improvement point. Confidence items are objects:
+    // { factor, group, score, measured, message, tip, priority }.
+    const FeedbackItem = ({ item, kind }) => {
+        if (typeof item === 'string') {
+            return <p className="text-slate-600 leading-relaxed font-medium pl-4 border-l-2 border-slate-100">{item}</p>;
+        }
+        const isStrength = kind === 'strength';
+        const GroupIcon = item.group === 'Visual' ? Eye : item.group === 'Vocal' ? Mic : null;
+        return (
+            <div className={`p-4 rounded-2xl border ${item.priority ? 'border-orange-200 bg-orange-50/60' : isStrength ? 'border-green-100 bg-green-50/40' : 'border-slate-100 bg-slate-50/60'}`}>
+                <div className="flex items-center justify-between gap-3 mb-1.5">
+                    <div className="flex items-center gap-2 flex-wrap">
+                        {GroupIcon && <GroupIcon size={14} className="text-slate-400" />}
+                        <span className="text-sm font-black text-slate-800">{item.factor}</span>
+                        {item.group && <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">{item.group}</span>}
+                        {item.priority && (
+                            <span className="text-[9px] font-black uppercase tracking-widest bg-orange-500 text-white px-2 py-0.5 rounded-full">Top priority</span>
+                        )}
+                    </div>
+                    {hasValue(item.score) && (
+                        <span className="text-xs font-black" style={{ color: getScoreColor(item.score) }}>{Math.round(item.score)}%</span>
+                    )}
+                </div>
+                <p className="text-sm text-slate-600 leading-relaxed font-medium">{item.message}</p>
+                {item.measured && <p className="text-[11px] text-slate-400 font-semibold mt-1">📏 {item.measured}</p>}
+                {item.tip && (
+                    <p className="text-[13px] text-slate-700 font-semibold mt-2 flex gap-2">
+                        <Lightbulb size={15} className="text-amber-500 shrink-0 mt-0.5" />
+                        <span>{item.tip}</span>
+                    </p>
+                )}
+            </div>
+        );
+    };
 
     const getConfidenceBadgeStyle = (level) => {
         if (level === 'High Confidence') {
@@ -158,8 +214,12 @@ const InterviewResults = () => {
                 </div>
 
                 <div className="text-center mb-8">
-                    <h1 className="text-4xl font-black text-slate-900 tracking-tighter uppercase italic">Performance Report</h1>
-                    <p className="text-slate-500 mt-2 font-medium">Detailed breakdown of your technical mock interview.</p>
+                    <h1 className="text-4xl font-black text-slate-900 tracking-tighter uppercase italic">{isTextMode ? 'Performance Report' : 'Confidence Report'}</h1>
+                    <p className="text-slate-500 mt-2 font-medium">
+                        {isTextMode
+                            ? 'Detailed breakdown of your technical mock interview.'
+                            : 'How confident you came across on camera and in your voice, and what to work on next.'}
+                    </p>
                     {/* Suggestion #2/#4: role/difficulty/date context */}
                     {(sessionRole || sessionDifficulty || formattedDate) && (
                         <div className="flex flex-wrap justify-center gap-2 mt-4">
@@ -175,6 +235,30 @@ const InterviewResults = () => {
                         </div>
                     )}
                 </div>
+
+                {/* Custom Practice (supporting feature): practice only, not tracked. */}
+                {sessionRole === 'Custom Practice' && (
+                    <div className="bg-blue-50/70 border border-blue-100 rounded-2xl p-4 flex flex-col sm:flex-row items-center gap-3 justify-between">
+                        <p className="text-xs font-semibold text-blue-900/80">
+                            📝 Custom Practice with your own questions. This report is saved in Practice History, separate
+                            from My Interviews and your progress.
+                        </p>
+                        <div className="flex gap-2 shrink-0">
+                            <button
+                                onClick={() => navigate('/practice-history')}
+                                className="bg-white hover:bg-slate-50 border border-blue-200 text-blue-700 px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest"
+                            >
+                                Practice History
+                            </button>
+                            <button
+                                onClick={() => navigate('/custom-practice')}
+                                className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest"
+                            >
+                                Practise again
+                            </button>
+                        </div>
+                    </div>
+                )}
 
                 {/* Some answers could not be checked (AI service busy / over its limit). */}
                 {(evaluations || []).some(e => e.isNotEvaluated) && (
@@ -272,12 +356,6 @@ const InterviewResults = () => {
                                     </div>
                                 )}
 
-                                {weakestFactor && (
-                                    <div className="mt-3 p-2.5 rounded-xl bg-red-50 border border-red-100 text-[10px] text-red-700 font-semibold">
-                                        🎯 Focus on improving: <span className="font-black">{weakestFactor.label}</span> ({Math.round(weakestFactor.score)}%)
-                                    </div>
-                                )}
-
                                 {/* Answer score: shown separately - NOT part of the Confidence Score. */}
                                 <div className="mt-4 pt-4 border-t border-slate-100">
                                     <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest mb-1 text-slate-500">
@@ -309,28 +387,43 @@ const InterviewResults = () => {
                     </div>
 
                     <div className="md:col-span-8 space-y-6">
-                        <div className="bg-white p-8 rounded-[2rem] border border-slate-100 shadow-sm">
-                            <div className="flex items-center gap-3 mb-4">
-                                <CheckCircle className="text-green-500" size={24} />
-                                <h3 className="text-sm font-black uppercase tracking-widest text-slate-800">Overall Strengths</h3>
+                        {isOldFeedbackFormat && (
+                            <div className="bg-slate-100 border border-slate-200 rounded-2xl p-4 text-[11px] text-slate-600 font-semibold">
+                                ℹ️ Older report format: the points below were written by AI before confidence-only feedback was added, so they may also talk about your answers.
                             </div>
-                            <ul className="list-disc pl-5 text-slate-600 leading-relaxed font-medium space-y-2">
-                                {Array.isArray(overallStrengths)
-                                    ? overallStrengths.map((str, i) => <li key={i}>{str}</li>)
-                                    : <li>{overallStrengths}</li>}
-                            </ul>
+                        )}
+                        <div className="bg-white p-8 rounded-[2rem] border border-slate-100 shadow-sm">
+                            <div className="flex items-center gap-3 mb-1">
+                                <CheckCircle className="text-green-500" size={24} />
+                                <h3 className="text-sm font-black uppercase tracking-widest text-slate-800">{isTextMode ? 'Overall Strengths' : 'Confidence Strengths'}</h3>
+                            </div>
+                            {!isTextMode && (
+                                <p className="text-[11px] text-slate-400 font-medium mb-4 ml-9">Confidence factors that reached the strong level (80% or above).</p>
+                            )}
+                            {strengthItems.length > 0 ? (
+                                <div className="space-y-3">
+                                    {strengthItems.map((item, i) => <FeedbackItem key={i} item={item} kind="strength" />)}
+                                </div>
+                            ) : (
+                                <p className="text-sm text-slate-400 font-medium">{noFeedbackText}</p>
+                            )}
                         </div>
 
                         <div className="bg-white p-8 rounded-[2rem] border border-slate-100 shadow-sm">
-                            <div className="flex items-center gap-3 mb-4">
+                            <div className="flex items-center gap-3 mb-1">
                                 <TrendingUp className="text-orange-500" size={24} />
-                                <h3 className="text-sm font-black uppercase tracking-widest text-slate-800">Key Areas for Improvement</h3>
+                                <h3 className="text-sm font-black uppercase tracking-widest text-slate-800">{isTextMode ? 'Key Areas for Improvement' : 'How to Build More Confidence'}</h3>
                             </div>
-                            <ul className="list-disc pl-5 text-slate-600 leading-relaxed font-medium space-y-2">
-                                {Array.isArray(keyImprovements)
-                                    ? keyImprovements.map((str, i) => <li key={i}>{str}</li>)
-                                    : <li>{keyImprovements}</li>}
-                            </ul>
+                            {!isTextMode && (
+                                <p className="text-[11px] text-slate-400 font-medium mb-4 ml-9">Weakest factor first. Each point shows what was measured and one thing to try next time.</p>
+                            )}
+                            {improvementItems.length > 0 ? (
+                                <div className="space-y-3">
+                                    {improvementItems.map((item, i) => <FeedbackItem key={i} item={item} kind="improvement" />)}
+                                </div>
+                            ) : (
+                                <p className="text-sm text-slate-400 font-medium">{noFeedbackText}</p>
+                            )}
                         </div>
 
                         {/* --- BSc Research Feature: Career Guidance Suggestions
@@ -436,9 +529,15 @@ const InterviewResults = () => {
                                             <p className="text-sm font-medium text-slate-600 bg-slate-50 p-4 rounded-xl italic">
                                                 {item.isSkipped ? 'You skipped this question.' : item.answer}
                                             </p>
+                                            {hasValue(item.speechRate) && (
+                                                <p className="text-[11px] font-semibold text-slate-500 mt-2">
+                                                    🎙️ Speaking speed: {item.speechRate} words per minute
+                                                    {hasValue(item.answerSeconds) ? ` (${Math.round(item.answerSeconds)} s answer)` : ''}
+                                                </p>
+                                            )}
                                         </div>
                                         <div className="bg-blue-50/50 p-4 rounded-xl border border-blue-100">
-                                            <p className="text-[10px] font-black uppercase tracking-widest text-blue-600 mb-2">AI Feedback</p>
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-blue-600 mb-2">{isTextMode ? 'AI Feedback' : 'Answer Feedback (content only - not part of the Confidence Score)'}</p>
                                             <p className="text-sm font-bold text-slate-700">
                                                 {item.isSkipped
                                                     ? 'This question was skipped and was not included in your score.'

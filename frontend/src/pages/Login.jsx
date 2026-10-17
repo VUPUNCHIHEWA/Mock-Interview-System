@@ -1,151 +1,149 @@
 import React, { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { FaVideo, FaArrowLeft } from "react-icons/fa";
+import { Link, useNavigate, useLocation } from "react-router-dom";
+import { Check } from "lucide-react";
 import axios from "axios";
+import {
+  AuthLayout,
+  AuthHeading,
+  FormAlert,
+  TextField,
+  PasswordField,
+  SubmitButton,
+  errorMessage,
+} from "../components/Authlayout";
+
+const API = "http://127.0.0.1:8000";
+
+// Left brand panel text
+const LoginPanel = () => (
+  <>
+    <h2 className="text-3xl font-bold leading-tight tracking-tight">
+      Practise interviews.
+      <br />
+      Build real confidence.
+    </h2>
+    <ul className="mt-7 space-y-3.5 text-[15px] text-blue-50">
+      {[
+        "Eye contact and head movement through your webcam",
+        "Speech rate, pitch variation and pauses from your voice",
+        "Clear feedback on what to improve next",
+      ].map((t) => (
+        <li key={t} className="flex gap-3">
+          <Check size={18} strokeWidth={2.4} className="mt-0.5 shrink-0" />
+          {t}
+        </li>
+      ))}
+    </ul>
+  </>
+);
 
 function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
 
-  const [email, setEmail] = useState("");
+  // Set by the Verify email page after a successful verification
+  const justVerified = location.state?.verified === true;
+
+  const [email, setEmail] = useState(location.state?.email || "");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
-  const handleLogin = async () => {
-    if (!email || !password) {
-      alert("Please enter both email and password");
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setError("");
+
+    if (!email.trim() || !password) {
+      setError("Please enter your email and password.");
       return;
     }
 
     setLoading(true);
     try {
-      const response = await axios.post(
-        "http://127.0.0.1:8000/login",
-        {
-          email: email,
-          password: password
-        }
-      );
+      const response = await axios.post(`${API}/login`, {
+        email: email.trim(),
+        password,
+      });
 
-      
       const user = response.data.user;
       const token = response.data.access_token;
 
-      
       localStorage.setItem("user", JSON.stringify(user));
-
-      
       if (user && user.id) {
         localStorage.setItem("userId", user.id);
       }
-
-      
       localStorage.setItem("token", token);
 
-      alert("Login Successful");
-      
-      
       navigate("/consent");
-
-    } catch (error) {
-      console.error("Login Error:", error);
-     
-      const errorMsg = error.response?.data?.detail || "Login Failed. Please check your credentials.";
-      alert(errorMsg);
+    } catch (err) {
+      console.error("Login Error:", err);
+      setError(errorMessage(err, "Login failed. Please check your details and try again."));
     } finally {
       setLoading(false);
     }
   };
 
+  // The backend says "Please verify your email first" for unverified accounts.
+  const needsVerification = error.toLowerCase().includes("verify");
+
   return (
-    <div className="min-h-screen bg-gray-100 flex items-center justify-center px-4">
-      <div className="w-full max-w-md md:max-w-lg bg-white rounded-2xl shadow-lg p-6 md:p-10">
-        
-        {/* Back Button */}
-        <Link
-          to="/"
-          className="flex items-center text-gray-600 mb-6 hover:text-gray-800 text-sm md:text-base transition-colors"
-        >
-          <FaArrowLeft className="mr-2" />
-          Back to Home
+    <AuthLayout panel={<LoginPanel />}>
+      <AuthHeading title="Log in" subtitle="Welcome back. Continue your interview practice." />
+
+      <form onSubmit={handleLogin} noValidate className="mt-6 space-y-4">
+        {justVerified && !error && (
+          <FormAlert tone="success">Email verified. Please log in to continue.</FormAlert>
+        )}
+
+        {error && (
+          <FormAlert>
+            {error}
+            {needsVerification && (
+              <>
+                {" "}
+                <Link
+                  to="/verify-otp"
+                  state={{ email: email.trim() }}
+                  className="font-medium underline underline-offset-2"
+                >
+                  Verify now
+                </Link>
+              </>
+            )}
+          </FormAlert>
+        )}
+
+        <TextField
+          id="email"
+          label="Email"
+          type="email"
+          autoComplete="email"
+          placeholder="you@example.com"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+
+        <PasswordField
+          id="password"
+          label="Password"
+          autoComplete="current-password"
+          placeholder="Your password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
+
+        <SubmitButton loading={loading} loadingText="Logging in...">
+          Log in
+        </SubmitButton>
+      </form>
+
+      <p className="mt-6 text-center text-sm text-slate-500">
+        Don't have an account?{" "}
+        <Link to="/signup" className="font-medium text-blue-600 hover:text-blue-700">
+          Create one
         </Link>
-
-        {/* Icon */}
-        <div className="flex justify-center mb-6">
-          <div className="bg-blue-600 p-3 md:p-4 rounded-2xl text-white text-xl md:text-2xl shadow-lg shadow-blue-100">
-            <FaVideo />
-          </div>
-        </div>
-
-        {/* Title */}
-        <h2 className="text-2xl md:text-3xl font-bold text-center text-gray-800 tracking-tight">
-          Welcome Back
-        </h2>
-        <p className="text-center text-gray-500 mt-2 mb-8 text-sm md:text-base">
-          Login to continue your preparation
-        </p>
-
-        {/* Email Field */}
-        <div className="mb-5 text-left">
-          <label className="block mb-2 text-sm font-semibold text-gray-700">
-            Email Address
-          </label>
-          <input
-            type="email"
-            placeholder="example@email.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="w-full border border-gray-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-sm md:text-base bg-gray-50"
-          />
-        </div>
-
-        {/* Password Field */}
-        <div className="mb-2 text-left">
-          <label className="block mb-2 text-sm font-semibold text-gray-700">
-            Password
-          </label>
-          <input
-            type="password"
-            placeholder="••••••••"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            onKeyPress={(e) => e.key === 'Enter' && handleLogin()}
-            className="w-full border border-gray-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-sm md:text-base bg-gray-50"
-          />
-        </div>
-
-        {/* Forgot Password */}
-        <div className="text-right mb-6">
-          <button className="text-blue-600 text-sm font-medium hover:text-blue-700 transition-colors">
-            Forgot password?
-          </button>
-        </div>
-
-        {/* Login Button */}
-        <button
-          onClick={handleLogin}
-          disabled={loading}
-          className={`w-full py-3 rounded-xl font-bold text-sm md:text-base transition-all shadow-lg ${
-            loading 
-            ? "bg-gray-400 cursor-not-allowed" 
-            : "bg-blue-600 text-white hover:bg-blue-700 active:scale-[0.98] shadow-blue-100"
-          }`}
-        >
-          {loading ? "Verifying..." : "Login"}
-        </button>
-
-        {/* Signup Link */}
-        <p className="text-center text-gray-600 mt-6 text-sm md:text-base">
-          Don't have an account?{" "}
-          <Link
-            to="/signup"
-            className="text-blue-600 font-bold hover:underline"
-          >
-            Sign up
-          </Link>
-        </p>
-
-      </div>
-    </div>
+      </p>
+    </AuthLayout>
   );
 }
 

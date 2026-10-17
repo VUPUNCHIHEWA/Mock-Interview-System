@@ -1,182 +1,119 @@
 import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { FaVideo } from "react-icons/fa";
 import axios from "axios";
+import {
+  AuthLayout,
+  AuthSteps,
+  AuthHeading,
+  FormAlert,
+  TextField,
+  PasswordField,
+  SubmitButton,
+  errorMessage,
+} from "../components/Authlayout";
+
+const API = "http://127.0.0.1:8000";
+
+// Must match MIN_PASSWORD_LENGTH in backend/app/services/auth_service.py
+const MIN_PASSWORD_LENGTH = 8;
+
+// Simple email format check (the backend sends a code to confirm it is real)
+const looksLikeEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 
 function Signup() {
-
   const navigate = useNavigate();
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [targetRole, setTargetRole] = useState("Software Engineer");
-  const [experienceLevel, setExperienceLevel] = useState("Entry Level");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
   const handleSignup = async (e) => {
     e.preventDefault();
+    setError("");
 
+    const cleanName = name.trim();
+    const cleanEmail = email.trim();
+
+    if (!cleanName) return setError("Please enter your full name.");
+    if (!looksLikeEmail(cleanEmail)) return setError("Please enter a valid email address.");
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      return setError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+    }
+
+    setLoading(true);
     try {
-
-      await axios.post("http://127.0.0.1:8000/signup", {
-        name: name,
-        email: email,
-        password: password,
-        target_role: targetRole,
-        experience_level: experienceLevel
+      // Target role and experience level were removed from this form:
+      // the interview has no role selection (ASSUMPTIONS D1) and the
+      // experience level was never used. The backend treats both as optional.
+      await axios.post(`${API}/signup`, {
+        name: cleanName,
+        email: cleanEmail,
+        password,
       });
 
-      alert("Signup Successful!");
-
-      navigate("/verify-otp", { state: { email } });
-
-    } catch (error) {
-
-      console.error(error);
-      alert(error.response?.data?.detail || error.response?.data?.message || "Signup Failed");
-
+      navigate("/verify-otp", { state: { email: cleanEmail } });
+    } catch (err) {
+      console.error(err);
+      setError(errorMessage(err, "Sign up failed. Please try again."));
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-100 px-4">
+    <AuthLayout
+      panel={<AuthSteps current={1} title={"Get started in\nthree short steps"} />}
+      stepLabel="Step 1 of 3"
+    >
+      <AuthHeading title="Create your account" subtitle="Free for students. Takes less than a minute." />
 
-      <div className="w-full max-w-md md:max-w-lg bg-white shadow-lg rounded-2xl p-6 md:p-8">
+      <form onSubmit={handleSignup} noValidate className="mt-6 space-y-4">
+        {error && <FormAlert>{error}</FormAlert>}
 
-        {/* Back */}
-        <Link
-          to="/"
-          className="text-gray-500 flex items-center mb-6 text-sm md:text-base"
-        >
-          ← Back to Home
+        <TextField
+          id="name"
+          label="Full name"
+          type="text"
+          autoComplete="name"
+          placeholder="e.g. Kasun Perera"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+
+        <TextField
+          id="email"
+          label="Email"
+          type="email"
+          autoComplete="email"
+          placeholder="you@example.com"
+          hint="We'll send a 6-digit code to verify it."
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+
+        <PasswordField
+          id="password"
+          label="Password"
+          autoComplete="new-password"
+          placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
+
+        <SubmitButton loading={loading} loadingText="Creating account...">
+          Create account
+        </SubmitButton>
+      </form>
+
+      <p className="mt-6 text-center text-sm text-slate-500">
+        Already have an account?{" "}
+        <Link to="/login" className="font-medium text-blue-600 hover:text-blue-700">
+          Log in
         </Link>
-
-        {/* Icon */}
-        <div className="flex justify-center mb-4">
-          <div className="bg-blue-600 p-3 md:p-4 rounded-xl text-white text-lg md:text-xl">
-            <FaVideo />
-          </div>
-        </div>
-
-        {/* Title */}
-        <h2 className="text-2xl md:text-3xl font-bold text-center">
-          Create Account
-        </h2>
-
-        <p className="text-center text-gray-500 mb-6 text-sm md:text-base">
-          Start your interview preparation journey
-        </p>
-
-        <form className="space-y-4" onSubmit={handleSignup}>
-
-          {/* Name */}
-          <div>
-            <label className="text-sm font-medium">
-              Full Name
-            </label>
-
-            <input
-              type="text"
-              placeholder="John Doe"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="w-full mt-1 px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm md:text-base"
-              required
-            />
-          </div>
-
-          {/* Email */}
-          <div>
-            <label className="text-sm font-medium">
-              Email Address
-            </label>
-
-            <input
-              type="email"
-              placeholder="john.doe@example.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full mt-1 px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm md:text-base"
-              required
-            />
-          </div>
-
-          {/* Password */}
-          <div>
-            <label className="text-sm font-medium">
-              Password
-            </label>
-
-            <input
-              type="password"
-              placeholder="********"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full mt-1 px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm md:text-base"
-              required
-            />
-          </div>
-
-          {/* Target Role */}
-          <div>
-            <label className="text-sm font-medium">
-              Target Role
-            </label>
-
-            <select
-              value={targetRole}
-              onChange={(e) => setTargetRole(e.target.value)}
-              className="w-full mt-1 px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm md:text-base bg-white"
-            >
-              <option>Software Engineer</option>
-              <option>Frontend Developer</option>
-              <option>Backend Developer</option>
-              <option>Full Stack Developer</option>
-              <option>QA Engineer</option>
-              <option>Data Analyst</option>
-              <option>DevOps Engineer</option>
-            </select>
-          </div>
-
-          {/* Experience Level */}
-          <div>
-            <label className="text-sm font-medium">
-              Experience Level
-            </label>
-
-            <select
-              value={experienceLevel}
-              onChange={(e) => setExperienceLevel(e.target.value)}
-              className="w-full mt-1 px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm md:text-base bg-white"
-            >
-              <option>Entry Level</option>
-              <option>Junior</option>
-              <option>Mid Level</option>
-              <option>Senior</option>
-            </select>
-          </div>
-
-          {/* Button */}
-          <button
-            type="submit"
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg mt-4 transition text-sm md:text-base"
-          >
-            Create Account
-          </button>
-
-        </form>
-
-        {/* Login Link */}
-        <p className="text-center text-gray-500 mt-6 text-sm md:text-base">
-          Already have an account?
-          <Link to="/login" className="text-blue-600 ml-1 font-medium">
-            Login
-          </Link>
-        </p>
-
-      </div>
-
-    </div>
+      </p>
+    </AuthLayout>
   );
 }
 

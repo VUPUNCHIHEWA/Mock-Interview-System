@@ -33,7 +33,7 @@ const FACTORS = [
     { key: 'overall', label: 'Confidence Score', group: null },
     { key: 'eyeContact', label: 'Eye Contact', group: 'Visual' },
     { key: 'headPose', label: 'Head Pose', group: 'Visual' },
-    { key: 'fillerWords', label: 'Filler Words', group: 'Vocal' },
+    { key: 'speechRate', label: 'Speech Rate', group: 'Vocal' },
     { key: 'longPauses', label: 'Long Pauses', group: 'Vocal' },
     { key: 'pitchVariation', label: 'Pitch Variation', group: 'Vocal' },
 ];
@@ -486,8 +486,8 @@ const ProgressPage = () => {
                                                     </div>
                                                     <div className="space-y-3">
                                                         <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">🎙️ Vocal</p>
-                                                        <FactorRow label="Filler Words" value={s.factors?.fillerWords}
-                                                            detail={hasValue(raw.fillerWords) ? `${raw.fillerWords} per minute` : null} />
+                                                        <FactorRow label="Speech Rate" value={s.factors?.speechRate}
+                                                            detail={hasValue(raw.speechRate) ? `${raw.speechRate} words per minute` : null} />
                                                         <FactorRow label="Long Pauses" value={s.factors?.longPauses}
                                                             detail={hasValue(raw.longPauses) ? `${raw.longPauses}% of answer time` : null} />
                                                         <FactorRow label="Pitch Variation" value={s.factors?.pitchVariation}

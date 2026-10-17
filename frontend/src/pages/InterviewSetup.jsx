@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import axios from 'axios';
 import { Loader2, Info, Mic, Camera, XCircle, X, ChevronRight, CheckCircle2, AlertTriangle } from 'lucide-react';
 
@@ -28,6 +28,8 @@ const API = "http://localhost:8000";
 
 // Must match GENERAL_INTERVIEW_ROLE in backend question_bank.py
 const GENERAL_INTERVIEW_ROLE = "General Interview";
+// Must match CUSTOM_PRACTICE_ROLE in backend custom_practice.py
+const CUSTOM_PRACTICE_ROLE = "Custom Practice";
 
 // --- ASSUMPTION - not literature-derived --- device-check thresholds.
 const FACE_FRAMES_NEEDED = 3;          // "ready" face frames in a row (~2-3 s)
@@ -54,6 +56,12 @@ const StatusIcon = ({ state }) => {
 
 const InterviewSetup = () => {
     const navigate = useNavigate();
+    const location = useLocation();
+    // Custom Practice (supporting feature): the student's own questions,
+    // sent here from the Custom Practice page. Absent = standard interview.
+    const customQuestions = location.state?.customQuestions || null;
+    const isCustom = Array.isArray(customQuestions) && customQuestions.length > 0;
+    const sessionRole = isCustom ? CUSTOM_PRACTICE_ROLE : GENERAL_INTERVIEW_ROLE;
 
     const [deviceCheck, setDeviceCheck] = useState({ status: 'idle', message: '' }); // idle | checking | success | error
     const [audioLevel, setAudioLevel] = useState(0);
@@ -80,7 +88,15 @@ const InterviewSetup = () => {
     const gazeSamplesRef = useRef([]);   // gaze angles from the passing frames
     const gazeBaselineRef = useRef(null);
 
+    // Every start/stop gets a new number. A camera request that finishes
+    // after the check was stopped (page closed, "Try Again", or React
+    // StrictMode mounting the page twice in development) sees that its number
+    // is old and switches its camera off at once - otherwise that stream was
+    // never stopped and the camera light stayed on after leaving the page.
+    const startIdRef = useRef(0);
+
     const stopTest = () => {
+        startIdRef.current += 1;   // cancels any camera request still opening
         faceLoopActiveRef.current = false;
         if (faceTimerRef.current) clearTimeout(faceTimerRef.current);
         if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -89,6 +105,7 @@ const InterviewSetup = () => {
         audioCtxRef.current = null;
         if (testStreamRef.current) testStreamRef.current.getTracks().forEach(track => track.stop());
         testStreamRef.current = null;
+        if (testVideoRef.current) testVideoRef.current.srcObject = null;
         setAudioLevel(0);
     };
 
@@ -152,6 +169,7 @@ const InterviewSetup = () => {
     // --- Start: live preview + mic meter + automatic checks --------------------
     const startTest = async () => {
         stopTest();
+        const myStartId = startIdRef.current;
         setFaceOk(false); setFaceReason('CHECKING'); faceStreakRef.current = 0; faceOkRef.current = false;
         gazeSamplesRef.current = []; gazeBaselineRef.current = null;
         setVoiceOk(false); setVoiceProgress(0); setVoiceHint(false);
@@ -159,6 +177,11 @@ const InterviewSetup = () => {
         setDeviceCheck({ status: 'checking', message: 'Requesting camera & microphone access...' });
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            if (myStartId !== startIdRef.current) {
+                // The check was stopped while the camera was opening.
+                stream.getTracks().forEach(track => track.stop());
+                return;
+            }
             testStreamRef.current = stream;
             if (testVideoRef.current) testVideoRef.current.srcObject = stream;
 
@@ -202,6 +225,7 @@ const InterviewSetup = () => {
             setDeviceCheck({ status: 'success', message: '' });
             startFaceLoop();
         } catch (err) {
+            if (myStartId !== startIdRef.current) return; // stopped meanwhile
             console.error("Device check failed:", err);
             setDeviceCheck({
                 status: 'error',
@@ -227,9 +251,10 @@ const InterviewSetup = () => {
         const userId = localStorage.getItem("userId") || 1;
         try {
             const response = await axios.post(`${API}/api/start-interview`, {
-                role: GENERAL_INTERVIEW_ROLE,
+                role: sessionRole,
                 interviewMode: 'MULTIMODAL',
                 userId: parseInt(userId, 10),
+                ...(isCustom ? { customQuestions } : {}),
             });
             if (response.data.success) {
                 navigate('/interview-session', {
@@ -237,9 +262,10 @@ const InterviewSetup = () => {
                     state: {
                         sessionId: response.data.sessionId,
                         firstQuestion: response.data.firstQuestion,
-                        role: GENERAL_INTERVIEW_ROLE,
+                        role: sessionRole,
                         difficulty: null,
                         interviewMode: 'MULTIMODAL',
+                        totalQuestions: response.data.totalQuestions,
                         // null when the check was skipped -> no personal calibration
                         gazeBaseline: gazeBaselineRef.current,
                     },
@@ -249,7 +275,7 @@ const InterviewSetup = () => {
             throw new Error("start-interview failed");
         } catch (error) {
             console.error("Failed to start interview:", error);
-            alert("Failed to initialize the interview session. Please try again.");
+            alert(error?.response?.data?.detail || "Failed to initialize the interview session. Please try again.");
             setIsLaunching(false);
             startTest();
         }
@@ -257,7 +283,7 @@ const InterviewSetup = () => {
 
     const closeTest = () => {
         stopTest();
-        navigate('/dashboard');
+        navigate(isCustom ? '/custom-practice' : '/dashboard');
     };
 
     const faceState = faceOk ? 'ok' : (faceReason === 'CHECKING' ? 'checking' : 'problem');
@@ -351,8 +377,10 @@ const InterviewSetup = () => {
                 <div className="bg-blue-50/60 border border-blue-100 rounded-2xl p-3 mb-4 flex gap-2 items-start">
                     <Info size={14} className="text-blue-500 shrink-0 mt-0.5" />
                     <p className="text-[10px] text-blue-900/80 font-medium leading-relaxed">
-                        6 general questions, read aloud. Your camera measures eye contact &amp; head pose, and your
-                        microphone measures filler words, pauses and pitch. Press <strong>Enter</strong> on the next
+                        {isCustom
+                            ? `Custom Practice: your ${customQuestions.length} questions, read aloud in a random order.`
+                            : '6 general questions, read aloud.'} Your camera measures eye contact &amp; head pose, and your
+                        microphone measures speaking speed, pauses and pitch. Press <strong>Enter</strong> on the next
                         screen to begin.
                     </p>
                 </div>

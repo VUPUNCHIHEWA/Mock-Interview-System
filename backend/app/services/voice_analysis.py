@@ -4,21 +4,30 @@ voice_analysis.py
 BSc Research Feature - voice (vocal) confidence measurement.
 
 Three factors are measured from each recorded answer and turned into a
-0-100 score. Every rule below is either simple arithmetic or a number
+0-100 score: Speech Rate, Long Pauses, Pitch Variation.
+(Filler Words was the first factor until 2026-10-16. It was REPLACED by
+Speech Rate because the speech-to-text leaves fillers out and a verbatim
+model was too slow on a laptop - see LIMITATIONS L9/L43. Filler counts with
+the old word list are still stored, only for the decision-tree model.) Every rule below is either simple arithmetic or a number
 taken from a cited source (see VOCAL_SCORING.md for the full, plain-English
 explanation and worked examples, and SOURCES.md for the references).
 
-1. FILLER WORDS  (S4, S20/S21)
-   Measured:  filler words per MINUTE of answer time
-              (rate = number of fillers / answer minutes).
-   Score:     <= 5 per minute  -> 100
-              >= 7 per minute  -> 0
-              5 to 7 per minute -> straight line between (e.g. 6 -> 50)
-   Source:    Speak AI (S4): "more than 5-7 filler words per minute becomes
-              noticeable and potentially distracting". This is the only
-              numeric guideline found and it is NOT peer-reviewed (see
-              LIMITATIONS.md L10). Per minute (not per answer) so that a long
-              answer is not punished just for being long.
+1. SPEECH RATE  (S42 Guyer et al., 2025; S43 Kirkland et al., 2022 -
+   see SPEECH_RATE_SCORING.md)
+   Measured:  words per minute (WPM) of SPEAKING time
+              = words in the transcript / (answer time - long-pause time).
+              Long pauses (>= 3 s) are left out because the Long Pauses
+              factor already measures them (no double counting).
+   Score:     listeners' mean confidence ratings in Guyer et al. (2025,
+              Experiment 1), rescaled so the best-rated speed = 100:
+                113 WPM -> 40   (rating 2.95 of 7)
+                148 WPM -> 76   (rating 4.70)
+                192 WPM -> 100  (rating 5.89, highest)
+                197 WPM -> 90   (rating 5.39)
+              straight lines between; below 113 -> 40 and above 197 -> 90
+              (no data outside the tested speeds, so nothing is invented).
+   Label:     Slow (< 148), Good (148-197), Fast (> 197).
+   N/A:       less than 10 s of speaking time in the session.
 
 2. LONG PAUSES  (S1, S2)
    Measured:  share of the answer time spent in long pauses
@@ -51,9 +60,9 @@ the average (never counted as 0 or 100).
 (silence before the student starts speaking and after they stop is not part
 of the answer).
 
-Session level: all answers are pooled (total fillers / total minutes, total
-long-pause seconds / total answer seconds, PVQ weighted by answer length),
-so every minute of speaking counts equally.
+Session level: all answers are pooled (total words / total speaking minutes,
+total long-pause seconds / total answer seconds, PVQ weighted by answer
+length), so every minute of speaking counts equally.
 
 The raw numbers used by the older parts of the app (filler count, long-pause
 count, pitch standard deviation in Hz) are still stored for the decision-tree
@@ -66,12 +75,23 @@ import re
 import librosa
 import numpy as np
 
+# OLD filler list - kept ONLY for the decision-tree model (ml_model.py), which
+# was trained on counts made with it. Not part of the vocal score any more.
 FILLER_WORDS = ["um", "uh", "ah", "like", "you know", "basically",
                 "actually", "so", "i mean"]
 
-# --- Filler words (S4) ---
-FILLER_RATE_FULL_MARKS = 5.0   # per minute: at or below -> 100
-FILLER_RATE_ZERO = 7.0         # per minute: at or above -> 0
+# --- Speech rate (S42 Guyer et al., 2025, Experiment 1 means) ---
+SPEECH_RATE_POINTS = [113.0, 148.0, 192.0, 197.0]   # words per minute (tested speeds)
+SPEECH_RATE_SCORES = [40.0, 76.0, 100.0, 90.0]      # = rating rescaled to the best (5.89)
+SPEECH_RATE_GOOD_MIN = 148.0      # below -> "Slow"
+SPEECH_RATE_GOOD_MAX = 197.0      # above -> "Fast"
+MIN_RATE_SPEAKING_SECONDS = 10.0  # less speaking time -> N/A (B30)
+WORD_PATTERN = re.compile(r"[A-Za-z0-9]+(?:['’\-][A-Za-z0-9]+)*")
+SPEECH_RATE_LABEL_TEXT = {
+    "Slow": "speakers this slow were rated less confident in research; try a slightly faster pace",
+    "Good": "this pace was rated confident in research",
+    "Fast": "very fast speech was rated a little less confident in research; slow down slightly",
+}
 
 # --- Long pauses (S1 citing S2) ---
 LONG_PAUSE_THRESHOLD_SECONDS = 3.0
@@ -101,8 +121,16 @@ def _linear_score(value, zero_at, full_at):
 # ---------------------------------------------------------------------------
 # Per-answer measurement
 # ---------------------------------------------------------------------------
+def count_words(transcript: str) -> int:
+    """Number of words in the transcript (contractions and hyphenated words
+    such as "I'm" or "real-time" count as one word)."""
+    if not transcript:
+        return 0
+    return len(WORD_PATTERN.findall(transcript))
+
+
 def count_filler_words(transcript: str) -> int:
-    """Count occurrences of common filler words in the transcribed text."""
+    """OLD filler count (FILLER_WORDS list) - only for the decision-tree model."""
     if not transcript:
         return 0
     transcript_lower = transcript.lower()
@@ -192,11 +220,13 @@ def analyze_voice(transcript: str, wav_path: str) -> dict:
     """
     Measures one answer. Returns:
         filler_word_count, long_pause_count, pitch_variation (Hz SD)  - raw numbers
-        speech_seconds, long_pause_seconds, pitch_pvq                  - used for scoring
+                                                     (old units, for ml_model.py)
+        word_count, speech_seconds, long_pause_seconds, pitch_pvq      - used for scoring
     Values that could not be measured are None (never a made-up number).
     """
     result = {
         "filler_word_count": count_filler_words(transcript),
+        "word_count": count_words(transcript),
         "long_pause_count": 0,
         "pitch_variation": 0.0,
         "speech_seconds": None,
@@ -225,8 +255,46 @@ def analyze_voice(transcript: str, wav_path: str) -> dict:
 # ---------------------------------------------------------------------------
 # Scores
 # ---------------------------------------------------------------------------
-def filler_score(fillers_per_minute):
-    return _linear_score(fillers_per_minute, FILLER_RATE_ZERO, FILLER_RATE_FULL_MARKS)
+def speech_rate_score(wpm):
+    """Guyer et al. (2025) ratings rescaled: 113 -> 40, 148 -> 76, 192 -> 100,
+    197 -> 90; straight lines between; np.interp keeps 40 below 113 and 90
+    above 197 (no values are invented outside the tested speeds)."""
+    if wpm is None:
+        return None
+    return round1(float(np.interp(wpm, SPEECH_RATE_POINTS, SPEECH_RATE_SCORES)))
+
+
+def speech_rate_label(wpm):
+    """Slow (< 148 WPM), Good (148-197), Fast (> 197)."""
+    if wpm is None:
+        return None
+    if wpm < SPEECH_RATE_GOOD_MIN:
+        return "Slow"
+    if wpm <= SPEECH_RATE_GOOD_MAX:
+        return "Good"
+    return "Fast"
+
+
+def speaking_seconds(response):
+    """Answer time minus long-pause time of one stored answer (None if unknown)."""
+    total = getattr(response, "speech_seconds", None)
+    if not total:
+        return None
+    return max(0.0, total - (getattr(response, "long_pause_seconds", None) or 0.0))
+
+
+def answer_words(response):
+    """Word count of one stored answer, from its transcript."""
+    return count_words(getattr(response, "user_answer", None) or "")
+
+
+def answer_speech_rate(response):
+    """Words per minute of one stored answer (shown per question, not scored:
+    one short answer is too little speech for a reliable score)."""
+    seconds = speaking_seconds(response)
+    if not seconds:
+        return None
+    return round(answer_words(response) / (seconds / 60.0))
 
 
 def long_pause_score(long_pause_share):
@@ -242,7 +310,7 @@ def pitch_score(pvq):
 def compute_session_vocal(responses) -> dict:
     """
     Session vocal score + per-factor breakdown from InterviewResponse rows
-    (or any objects with filler_word_count, speech_seconds,
+    (or any objects with filler_word_count, user_answer, speech_seconds,
     long_pause_seconds and pitch_pvq).
 
     Returns {"vocalScore": float|None, "vocalBreakdown": dict|None,
@@ -257,8 +325,11 @@ def compute_session_vocal(responses) -> dict:
 
     total_seconds = sum(r.speech_seconds for r in measured)
     total_minutes = total_seconds / 60.0
-    total_fillers = sum(r.filler_word_count for r in measured)
-    filler_rate = total_fillers / total_minutes if total_minutes > 0 else None
+    total_words = sum(answer_words(r) for r in measured)
+    speak_seconds = sum(speaking_seconds(r) or 0.0 for r in measured)
+    wpm = total_words / (speak_seconds / 60.0) if speak_seconds > 0 else None
+    enough_speech = speak_seconds >= MIN_RATE_SPEAKING_SECONDS
+    rate_label = speech_rate_label(wpm) if enough_speech else None
 
     paused = sum((r.long_pause_seconds or 0.0) for r in measured)
     pause_share = paused / total_seconds if total_seconds > 0 else None
@@ -269,13 +340,19 @@ def compute_session_vocal(responses) -> dict:
            if pitch_seconds > 0 else None)
 
     breakdown = {
-        "fillerWords": {
-            "score": filler_score(filler_rate),
-            "value": round(filler_rate, 1) if filler_rate is not None else None,
-            "unit": "per minute",
-            "fullMarksAtOrBelow": FILLER_RATE_FULL_MARKS,
-            "zeroAtOrAbove": FILLER_RATE_ZERO,
-            "count": total_fillers,
+        "speechRate": {
+            # Score only with at least 10 s of speaking time (B30).
+            "score": speech_rate_score(wpm) if enough_speech else None,
+            "value": round(wpm) if wpm is not None else None,
+            "unit": "words per minute",
+            "label": rate_label,
+            "labelText": SPEECH_RATE_LABEL_TEXT.get(rate_label),
+            "ratePoints": SPEECH_RATE_POINTS,
+            "scorePoints": SPEECH_RATE_SCORES,
+            "words": total_words,
+            "speakingSeconds": round(speak_seconds, 1),
+            "minSpeakingSeconds": MIN_RATE_SPEAKING_SECONDS,
+            "enoughSpeech": enough_speech,
         },
         "longPauses": {
             "score": long_pause_score(pause_share),
@@ -294,7 +371,7 @@ def compute_session_vocal(responses) -> dict:
         },
         "answerSeconds": round(total_seconds, 1),
     }
-    scores = [breakdown[k]["score"] for k in ("fillerWords", "longPauses", "pitchVariation")
+    scores = [breakdown[k]["score"] for k in ("speechRate", "longPauses", "pitchVariation")
               if breakdown[k]["score"] is not None]
     vocal = round1(sum(scores) / len(scores)) if scores else None
     return {"vocalScore": vocal, "vocalBreakdown": breakdown, "answersMeasured": len(measured)}

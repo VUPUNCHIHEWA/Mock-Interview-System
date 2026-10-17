@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { notifyProfileUpdated } from '../utils/Currentuser';
 import { User, Mail, GraduationCap, Link2, Save, Loader2, CheckCircle2 } from 'lucide-react';
 
 // --- BSc Research Feature: role options here MUST match the backend's
@@ -49,6 +50,8 @@ const Profile = () => {
         try {
             await axios.put(`http://localhost:8000/profile/${userId}`, profile);
             setSaveSuccess(true);
+            // Update the name shown in the sidebar and dashboard (I20)
+            notifyProfileUpdated();
         } catch (err) {
             console.error("Failed to save profile:", err);
             alert("Could not save profile changes.");

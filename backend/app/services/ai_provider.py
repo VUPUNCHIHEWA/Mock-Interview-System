@@ -198,6 +198,10 @@ class _SpeechProfile:
         else:  # digital silence (all zeros)
             noise_floor, self.threshold = float("-inf"), 0.0
         self.noise_floor = noise_floor
+        # Loudest 50 ms piece and clip length: shown in the server log so a
+        # silent or too-quiet microphone can be told apart from real silence.
+        self.loudest = finite[-1] if finite else float("-inf")
+        self.length_seconds = len(mono) / 1000.0
         self.voiced = [l >= self.threshold for l in levels]
 
     def seconds(self, start_s=0.0, end_s=None, pad_s=0.2):
@@ -302,9 +306,17 @@ def transcribe(audio_segment, wav_path):
     """
     try:
         profile = _SpeechProfile(audio_segment)
-        print(f"🔊 Voice in answer: {profile.total_seconds:.1f}s "
-              f"(noise {profile.noise_floor:.1f} dBFS, voice threshold {profile.threshold:.1f} dBFS)")
+        print(f"🔊 Voice in answer: {profile.total_seconds:.1f}s of {profile.length_seconds:.1f}s "
+              f"(loudest {profile.loudest:.1f} dBFS, noise {profile.noise_floor:.1f} dBFS, "
+              f"voice threshold {profile.threshold:.1f} dBFS)")
         if profile.total_seconds < MIN_SPEECH_SECONDS:
+            if profile.loudest < -80:
+                print("⚠️ The recording is (almost) completely silent - the microphone sent no sound. "
+                      "Check the browser/Windows microphone setting and the app's mute button.")
+            elif profile.loudest < profile.threshold:
+                print(f"⚠️ Sound was recorded but it is too quiet (loudest {profile.loudest:.1f} dBFS, "
+                      f"needs {profile.threshold:.1f}). Raise the microphone input volume, or lower "
+                      f"SPEECH_MIN_DBFS in backend/.env.")
             print("🔇 No speech in the recording - skipping speech-to-text.")
             return "", "silence-check"
     except Exception as e:  # never block transcription because of this check

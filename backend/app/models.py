@@ -112,6 +112,22 @@ class InterviewResponse(Base):
 
     session = relationship("InterviewSession", back_populates="responses")
 
+class CustomPracticeQuestion(Base):
+    """
+    Supporting feature (Custom Practice): the student's own questions for
+    one session, in the (random) order they will be asked. A new table, so
+    create_all() adds it to existing databases automatically.
+    """
+    __tablename__ = "custom_practice_questions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String(255), ForeignKey("interview_sessions.session_id", ondelete="CASCADE"), nullable=False, index=True)
+    position = Column(Integer, nullable=False)
+    question_text = Column(Text, nullable=False)
+
+    session = relationship("InterviewSession")
+
+
 class VisualMetric(Base):
     __tablename__ = "visual_metrics"
 

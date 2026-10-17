@@ -3,7 +3,7 @@ from fastapi import APIRouter, File, Form, UploadFile, Request, Depends, HTTPExc
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from app.core.dependencies import get_db, get_current_user, ensure_same_user, get_owned_session
-from app.models import User, InterviewSession, InterviewResponse, VisualMetric
+from app.models import User, InterviewSession, InterviewResponse, VisualMetric, CustomPracticeQuestion
 from app.core.config import gemini_client
 import base64
 import numpy as np
@@ -15,7 +15,9 @@ try:
 except Exception:
     mp = None
     mp_face_detection = None
-from app.services.voice_analysis import confidence_missing_reason
+from app.services.voice_analysis import confidence_missing_reason, answer_speech_rate
+from app.services.confidence_feedback import build_confidence_feedback
+from app.services.custom_practice import core_sessions_only, CUSTOM_PRACTICE_ROLE
 from app.services.interview_service import continue_interview_session, start_interview_session, end_interview_session, replace_current_question, REPLACED_ANSWER_MARKER, stored_main_score
 from app.services.progress_tracker import get_user_progress, get_comparison_options, get_progress_timeline
 from app.services.istqb_quiz import get_quiz_questions, grade_quiz
@@ -217,7 +219,12 @@ async def end_interview(data: dict, db: Session = Depends(get_db), current_user:
 @router.get("/api/interview-history/{user_id}")
 async def get_interview_history(user_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_same_user(user_id, current_user)
-    sessions = db.query(InterviewSession).filter(InterviewSession.user_id == user_id).order_by(InterviewSession.created_at.desc()).all()
+    # Custom Practice sessions (supporting feature) are kept out of My
+    # Interviews so they never mix with the standard interviews (D7).
+    sessions = db.query(InterviewSession).filter(
+        InterviewSession.user_id == user_id,
+        core_sessions_only(InterviewSession.role),
+    ).order_by(InterviewSession.created_at.desc()).all()
     
     import json
     history = []
@@ -246,6 +253,42 @@ async def get_interview_history(user_id: int, db: Session = Depends(get_db), cur
         })
     return {"success": True, "history": history}
 
+# --- Supporting feature: Practice History (Custom Practice sessions ONLY).
+# A separate list so practice reports can be reopened, while My Interviews
+# and the Progress page stay limited to the standard (core) interviews (D7, D11).
+# Reports open through /api/interview-session/{id} and are deleted through the
+# normal delete endpoint, both of which check that the session is the user's.
+@router.get("/api/practice-history/{user_id}")
+async def get_practice_history(user_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ensure_same_user(user_id, current_user)
+    sessions = db.query(InterviewSession).filter(
+        InterviewSession.user_id == user_id,
+        InterviewSession.role == CUSTOM_PRACTICE_ROLE,
+    ).order_by(InterviewSession.created_at.desc()).all()
+
+    import json
+    items = []
+    for s in sessions:
+        confidence_level = "NOT_AVAILABLE"
+        if s.summary_feedback:
+            try:
+                confidence_level = json.loads(s.summary_feedback).get("confidenceLevel", "NOT_AVAILABLE")
+            except (json.JSONDecodeError, TypeError):
+                pass
+        questions = [q.question_text for q in db.query(CustomPracticeQuestion).filter(
+            CustomPracticeQuestion.session_id == s.session_id
+        ).order_by(CustomPracticeQuestion.position.asc()).all()]
+        items.append({
+            "sessionId": s.session_id,
+            "status": s.status,
+            "createdAt": s.created_at,
+            "overallScore": stored_main_score(s) if s.status == "Completed" else None,
+            "confidenceLevel": confidence_level,
+            "questionCount": len(questions),
+            "questions": questions,
+        })
+    return {"success": True, "history": items}
+
 @router.get("/api/interview-session/{session_id}")
 async def get_interview_session_details(session_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     session = get_owned_session(db, session_id, current_user)
@@ -273,6 +316,10 @@ async def get_interview_session_details(session_id: str, db: Session = Depends(g
             "feedback": r.feedback,
             "isSkipped": is_skipped,
             "isNotEvaluated": is_not_evaluated,
+            # Per-answer delivery info (explainability): speaking speed and
+            # answer time. None for answers without voice measures.
+            "speechRate": answer_speech_rate(r) if r.filler_word_count is not None else None,
+            "answerSeconds": r.speech_seconds,
         })
         
     import json
@@ -322,6 +369,12 @@ async def get_interview_session_details(session_id: str, db: Session = Depends(g
             confidence_score = None
             confidence_level = "NOT_AVAILABLE"
         confidence_note = confidence_missing_reason(visual_score, vocal_score)
+    # Confidence feedback is rebuilt from the stored measurements, so reports
+    # saved before this change (which had an AI summary of the answers) also
+    # show confidence-only strengths and improvements. Old 60/20/20 sessions
+    # (scoringVersion 1) keep what was saved with them.
+    if not is_text_mode and scoring_version >= 2 and (visual_breakdown or vocal_breakdown):
+        overall_strengths, key_improvements = build_confidence_feedback(visual_breakdown, vocal_breakdown)
     main_score = stored_main_score(session)
 
     return {

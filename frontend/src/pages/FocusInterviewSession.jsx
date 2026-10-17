@@ -49,7 +49,7 @@ const TOTAL_QUESTIONS = 6;
 // being sent (frames never overlap, so they cannot queue up).
 const VISUAL_CAPTURE_GAP_MS = 1000;
 
-// Below this length an answer is too short for reliable filler/pause/pitch
+// Below this length an answer is too short for reliable speech-rate/pause/pitch
 // metrics (same researcher-set threshold as the classic interview screen).
 const MIN_RECORDING_SECONDS = 5;
 
@@ -108,7 +108,10 @@ const formatTime = (totalSeconds) => {
 const FocusInterviewSession = () => {
     const location = useLocation();
     const navigate = useNavigate();
-    const { sessionId, firstQuestion, gazeBaseline } = location.state || { sessionId: "demo_session", firstQuestion: null };
+    const { sessionId, firstQuestion, gazeBaseline, role, totalQuestions: stateTotal } = location.state || { sessionId: "demo_session", firstQuestion: null };
+    // Custom Practice asks all of the student's questions; standard = 6.
+    const totalQuestions = stateTotal || TOTAL_QUESTIONS;
+    const isCustomPractice = role === 'Custom Practice';
 
     const [phase, setPhase] = useState(PHASE.READY);
     const [questionNumber, setQuestionNumber] = useState(1);
@@ -683,7 +686,7 @@ const FocusInterviewSession = () => {
     // ------------------------------------------------------------------
     // The notification panel content for each phase.
     // ------------------------------------------------------------------
-    const qLabel = `Question ${Math.min(questionNumber, TOTAL_QUESTIONS)} of ${TOTAL_QUESTIONS}`;
+    const qLabel = `Question ${Math.min(questionNumber, totalQuestions)} of ${totalQuestions}`;
     let title = null;
     let hint = null;
     let tone = 'blue';
@@ -738,7 +741,8 @@ const FocusInterviewSession = () => {
             hint = (
                 <>
                     Your face was not detected for {NO_FACE_TIMEOUT_SECONDS} seconds, so that question was removed
-                    (it does not count). When you are ready, press <Key>Enter</Key> for a new question.
+                    (it does not count). When you are ready, press <Key>Enter</Key>{' '}
+                    {isCustomPractice ? 'to hear the same question again.' : 'for a new question.'}
                 </>
             );
             tone = 'amber';

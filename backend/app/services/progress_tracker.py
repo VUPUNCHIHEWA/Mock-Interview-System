@@ -33,6 +33,8 @@ sourced from literature.
 
 import json
 
+from app.services.custom_practice import core_sessions_only
+
 SIGNIFICANT_CHANGE_THRESHOLD = 5  # percentage points
 
 # Ranking for comparing categorical confidence labels (Step 4 ML Core output)
@@ -290,7 +292,8 @@ def get_comparison_options(db, user_id: int) -> dict:
 
     completed_sessions = db.query(InterviewSession).filter(
         InterviewSession.user_id == user_id,
-        InterviewSession.status == "Completed"
+        InterviewSession.status == "Completed",
+        core_sessions_only(InterviewSession.role)  # Custom Practice is not tracked (D7)
     ).all()
 
     groups = {}
@@ -341,7 +344,8 @@ def get_user_progress(db, user_id: int, role: str = None, difficulty: str = None
 
     completed_sessions = db.query(InterviewSession).filter(
         InterviewSession.user_id == user_id,
-        InterviewSession.status == "Completed"
+        InterviewSession.status == "Completed",
+        core_sessions_only(InterviewSession.role)  # Custom Practice is not tracked (D7)
     ).order_by(InterviewSession.created_at.asc()).all()
 
     if len(completed_sessions) < 2:
@@ -458,7 +462,8 @@ def get_research_summary(db) -> dict:
     for uid in all_user_ids:
         completed = db.query(InterviewSession).filter(
             InterviewSession.user_id == uid,
-            InterviewSession.status == "Completed"
+            InterviewSession.status == "Completed",
+            core_sessions_only(InterviewSession.role)  # Custom Practice is not tracked (D7)
         ).order_by(InterviewSession.created_at.asc()).all()
 
         if len(completed) >= 2:
@@ -501,13 +506,13 @@ def get_research_summary(db) -> dict:
 # Progress timeline (Progress page chart + history cards)
 # ---------------------------------------------------------------------------
 # Returns EVERY completed session of a user, oldest first, with the overall
-# score and the 5 confidence-factor scores (Eye Contact, Head Pose, Filler
-# Words, Long Pauses, Pitch Variation) as 0-100%. The frontend draws the
+# score and the 5 confidence-factor scores (Eye Contact, Head Pose, Speech
+# Rate, Long Pauses, Pitch Variation) as 0-100%. The frontend draws the
 # time chart (24h / 7d / 30d / 90d / 1y / All) and the history cards from it.
 #
 # Factor scores are re-calculated from the stored raw data, so older
 # sessions get them too where the raw data exists:
-#   - Vocal factors: from the per-answer filler count, answer time,
+#   - Vocal factors: from the per-answer transcript (word count), answer time,
 #     long-pause time and pitch variation quotient, using the SAME function
 #     as the results page (compute_session_vocal). Answers recorded before
 #     these were stored have no vocal factors (N/A).
@@ -523,7 +528,8 @@ def get_progress_timeline(db, user_id: int) -> dict:
 
     sessions = (
         db.query(InterviewSession)
-        .filter(InterviewSession.user_id == user_id, InterviewSession.status == "Completed")
+        .filter(InterviewSession.user_id == user_id, InterviewSession.status == "Completed",
+                core_sessions_only(InterviewSession.role))  # Custom Practice is not tracked (D7)
         .order_by(InterviewSession.created_at.asc())
         .all()
     )
@@ -569,14 +575,14 @@ def get_progress_timeline(db, user_id: int) -> dict:
         factors = {
             "eyeContact": _round(gaze),
             "headPose": _round(head),
-            "fillerWords": None,
+            "speechRate": None,
             "longPauses": None,
             "pitchVariation": None,
         }
         vocal_raw = {}
         breakdown = compute_session_vocal(vocal_by_session.get(s.session_id, []))["vocalBreakdown"]
         if breakdown:
-            for key in ("fillerWords", "longPauses", "pitchVariation"):
+            for key in ("speechRate", "longPauses", "pitchVariation"):
                 factors[key] = breakdown[key]["score"]
                 vocal_raw[key] = breakdown[key]["value"]
 

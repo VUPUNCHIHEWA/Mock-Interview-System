@@ -8,10 +8,14 @@ import traceback
 from fastapi import HTTPException
 from fastapi.concurrency import run_in_threadpool
 from app.core.config import GEMINI_MODEL, gemini_client, gemini_types
-from app.models import InterviewSession, InterviewResponse
+from app.models import InterviewSession, InterviewResponse, CustomPracticeQuestion
 from app.services.question_bank import get_next_question, AVAILABLE_ROLES, GENERAL_INTERVIEW_ROLE
-from app.services.voice_analysis import analyze_voice, compute_session_vocal, combine_confidence, confidence_missing_reason
+from app.services.voice_analysis import (analyze_voice, compute_session_vocal, combine_confidence,
+                                         confidence_missing_reason, answer_speech_rate)
 from app.services.ml_model import predict_confidence_level
+from app.services.confidence_feedback import build_confidence_feedback
+from app.services.custom_practice import (CUSTOM_PRACTICE_ROLE, is_custom_practice, core_sessions_only,
+                                          clean_custom_questions, shuffled)
 from app.services.career_resources import get_recommended_resources
 from app.services import ai_provider
 
@@ -114,6 +118,9 @@ NO_SPEECH_FEEDBACK = "No speech was detected in your recording, so this answer w
 # Scoring version saved with each session (see end_interview_session).
 SCORING_VERSION = 2
 
+# Questions in a standard interview (Custom Practice asks all its questions).
+MAX_QUESTIONS_PER_SESSION = 6
+
 
 def stored_main_score(session):
     """
@@ -153,6 +160,9 @@ def _question_history(db, user_id, current_session_id=None) -> dict:
         ).filter(
             InterviewSession.user_id == user_id,
             InterviewSession.session_id != (current_session_id or ""),
+            # Custom Practice questions are the student's own, not bank
+            # questions, so they never affect which bank questions come next.
+            core_sessions_only(InterviewSession.role),
         ).order_by(InterviewResponse.id.asc()).all()
     except Exception as e:
         print(f"⚠️ Could not read question history ({e}) - questions may repeat.")
@@ -162,6 +172,15 @@ def _question_history(db, user_id, current_session_id=None) -> dict:
         if text:
             history[text] = index  # later rows overwrite -> most recent use
     return history
+
+
+# --- Custom Practice (supporting feature, see custom_practice.py) ----------
+def _custom_questions(db, session_id):
+    """The student's questions for this session, in asking order."""
+    rows = db.query(CustomPracticeQuestion).filter(
+        CustomPracticeQuestion.session_id == session_id
+    ).order_by(CustomPracticeQuestion.position.asc()).all()
+    return [r.question_text for r in rows]
 
 
 async def replace_current_question(data: dict, db=None):
@@ -194,11 +213,16 @@ async def replace_current_question(data: dict, db=None):
     current.feedback = REPLACED_ANSWER_MARKER
 
     # 3) A new question in its place.
-    asked = [row[0] for row in db.query(InterviewResponse.question_text).filter(
-        InterviewResponse.session_id == session_id).all()]
-    history = _question_history(db, session.user_id, session_id)
-    new_question = get_next_question(session.role, asked, difficulty=session.difficulty,
-                                     history=history)["question"]
+    if is_custom_practice(session):
+        # Custom Practice uses only the student's own list, so the same
+        # question is asked again (practice only - no study data, D9).
+        new_question = current.question_text
+    else:
+        asked = [row[0] for row in db.query(InterviewResponse.question_text).filter(
+            InterviewResponse.session_id == session_id).all()]
+        history = _question_history(db, session.user_id, session_id)
+        new_question = get_next_question(session.role, asked, difficulty=session.difficulty,
+                                         history=history)["question"]
     db.add(InterviewResponse(session_id=session_id, question_text=new_question))
     db.commit()
     print(f"🔁 Question replaced (face not visible 30 s); {deleted} camera frames discarded.")
@@ -208,6 +232,9 @@ async def replace_current_question(data: dict, db=None):
 
 def _interview_context(session) -> str:
     """How the interview is described to Gemini in prompts."""
+    if is_custom_practice(session):
+        return ("a practice interview using questions the candidate chose themselves "
+                "(they may be technical IT questions or general interview questions)")
     if session.role == GENERAL_INTERVIEW_ROLE:
         return "a general job interview (general, non-role-specific questions)"
     return f"a {session.role} role ({session.difficulty} level)"
@@ -225,18 +252,30 @@ async def start_interview_session(data: dict, client=None, db=None):
 
     session_id = f"session_{int(time.time())}"
 
+    # Custom Practice (supporting feature): the student's own questions.
+    custom_questions = None
+    if data.get("customQuestions") is not None:
+        custom_questions, error = clean_custom_questions(data.get("customQuestions"))
+        if error:
+            raise HTTPException(status_code=400, detail=error)
+        custom_questions = shuffled(custom_questions)
+        role = CUSTOM_PRACTICE_ROLE
+
     # General Interview has no job role and no level.
-    if role == GENERAL_INTERVIEW_ROLE:
+    if role in (GENERAL_INTERVIEW_ROLE, CUSTOM_PRACTICE_ROLE):
         difficulty = None
 
-    if role not in AVAILABLE_ROLES and role != GENERAL_INTERVIEW_ROLE:
+    if role not in AVAILABLE_ROLES and role not in (GENERAL_INTERVIEW_ROLE, CUSTOM_PRACTICE_ROLE):
         print(f"⚠️ Role '{role}' not in curated question bank {AVAILABLE_ROLES} - "
               f"using general questions only for this session.")
 
-    history = _question_history(db, user_id)
-    first_question_data = get_next_question(role, already_asked=[], difficulty=difficulty,
-                                            history=history)
-    first_question = first_question_data["question"]
+    if custom_questions:
+        first_question = custom_questions[0]
+    else:
+        history = _question_history(db, user_id)
+        first_question_data = get_next_question(role, already_asked=[], difficulty=difficulty,
+                                                history=history)
+        first_question = first_question_data["question"]
 
     if db:
         new_session = InterviewSession(
@@ -250,6 +289,11 @@ async def start_interview_session(data: dict, client=None, db=None):
         db.add(new_session)
         db.commit()
         db.refresh(new_session)
+
+        if custom_questions:
+            for position, text in enumerate(custom_questions):
+                db.add(CustomPracticeQuestion(session_id=session_id, position=position, question_text=text))
+            db.commit()
         
         new_response = InterviewResponse(
             session_id=session_id,
@@ -263,6 +307,8 @@ async def start_interview_session(data: dict, client=None, db=None):
         "message": "Interview session initialized (question bank)!",
         "sessionId": session_id,
         "firstQuestion": first_question,
+        # Custom Practice asks every uploaded question; standard interviews ask 6.
+        "totalQuestions": len(custom_questions) if custom_questions else MAX_QUESTIONS_PER_SESSION,
     }
 
 
@@ -417,8 +463,11 @@ async def continue_interview_session(data: dict, client=None, db=None):
         pitch_text = f"{pvq:.3f} (pitch variation quotient)" if isinstance(pvq, (int, float)) else "not available"
         seconds = voice_metrics.get("speech_seconds")
         seconds_text = f" in {seconds:.0f} s of answer time" if isinstance(seconds, (int, float)) else ""
+        words = voice_metrics.get("word_count")
+        speak_s = (seconds or 0) - (voice_metrics.get("long_pause_seconds") or 0)
+        rate_text = f"{words / (speak_s / 60.0):.0f} words per minute" if words and speak_s > 0 else "speech rate not available"
         vocal_context = (
-            f"Measured from audio: {voice_metrics.get('filler_word_count')} filler words{seconds_text}, "
+            f"Measured from audio: {rate_text}{seconds_text}, "
             f"{voice_metrics.get('long_pause_count')} long pauses (3 seconds or more), "
             f"pitch variation {pitch_text}"
         )
@@ -505,7 +554,8 @@ async def continue_interview_session(data: dict, client=None, db=None):
         last_response.feedback = default_eval.get("feedback", "")
         db.commit()
 
-    MAX_QUESTIONS_PER_SESSION = 6
+    custom_list = _custom_questions(db, session_id) if is_custom_practice(session) else None
+    max_questions = len(custom_list) if custom_list else MAX_QUESTIONS_PER_SESSION
 
     already_asked_rows = db.query(InterviewResponse.question_text).filter(
         InterviewResponse.session_id == session_id
@@ -519,7 +569,7 @@ async def continue_interview_session(data: dict, client=None, db=None):
     ).count()
     counted_questions = len(already_asked) - replaced_count
 
-    if counted_questions >= MAX_QUESTIONS_PER_SESSION:
+    if counted_questions >= max_questions:
         return {
             "success": True,
             "nextQuestion": None,
@@ -530,10 +580,14 @@ async def continue_interview_session(data: dict, client=None, db=None):
             },
         }
 
-    history = _question_history(db, session.user_id, session_id)
-    next_question_data = get_next_question(session.role, already_asked, difficulty=session.difficulty,
-                                           history=history)
-    next_question = next_question_data["question"]
+    if custom_list:
+        # Next question in the student's (shuffled) list.
+        next_question = custom_list[counted_questions]
+    else:
+        history = _question_history(db, session.user_id, session_id)
+        next_question_data = get_next_question(session.role, already_asked, difficulty=session.difficulty,
+                                               history=history)
+        next_question = next_question_data["question"]
 
     new_question_db = InterviewResponse(
         session_id=session_id,
@@ -542,7 +596,7 @@ async def continue_interview_session(data: dict, client=None, db=None):
     db.add(new_question_db)
     db.commit()
 
-    session_complete_after_this = counted_questions + 1 >= MAX_QUESTIONS_PER_SESSION
+    session_complete_after_this = counted_questions + 1 >= max_questions
 
     return {
         "success": True,
@@ -676,6 +730,10 @@ async def end_interview_session(data: dict, client=None, db=None):
             "feedback": r.feedback,
             "isSkipped": is_skipped,
             "isNotEvaluated": is_not_evaluated,
+            # Per-answer delivery info (explainability): speaking speed and
+            # answer time. None for answers without voice measures.
+            "speechRate": answer_speech_rate(r) if r.filler_word_count is not None else None,
+            "answerSeconds": r.speech_seconds,
         })
 
     # Scored-only subset (excludes skips and not-yet-evaluated answers)
@@ -741,20 +799,11 @@ async def end_interview_session(data: dict, client=None, db=None):
         avg_pitch = sum(r.pitch_variation or 0 for r in responses_with_audio) / len(responses_with_audio)
     else:
         avg_filler, avg_pause, avg_pitch = None, None, None
-    if vocal_breakdown:
-        vocal_context = (
-            f"Filler words: {vocal_breakdown['fillerWords']['value']} per minute; "
-            f"long pauses (3 s or more): {vocal_breakdown['longPauses']['value']}% of answer time; "
-            f"pitch variation quotient: {vocal_breakdown['pitchVariation']['value']}")
-    elif responses_with_audio:
-        vocal_context = "Voice could not be measured for the recorded answers."
-    else:
-        vocal_context = "No audio answers were recorded in this session."
-
     audio_responses = sum(1 for r in full_responses if r.audio_path)
     textual_score = avg_score
-    overall_strengths = "Candidate demonstrated foundational technical knowledge."
-    key_improvements = "Focus on explaining real-world architecture and edge cases."
+    # Empty until filled below - never a made-up placeholder sentence.
+    overall_strengths = []
+    key_improvements = []
     final_visual = int(avg_visual) if avg_visual is not None else None
 
     # The AI confidence level also needs BOTH camera and voice: with no
@@ -766,50 +815,38 @@ async def end_interview_session(data: dict, client=None, db=None):
     print(f"🌳 ML Core - Predicted Confidence Level: {confidence_level}")
 
     summary_engine = None
-    if ai_provider.available() and evaluations:
+    is_text_mode = bool(session.interview_mode and session.interview_mode.upper() == "TEXT")
+
+    if not is_text_mode:
+        # CONFIDENCE FEEDBACK (research scope): strengths and improvements
+        # come ONLY from the measured confidence factors (eye contact, head
+        # pose, speech rate, long pauses, pitch variation) - rule-based,
+        # explainable and reproducible (confidence_feedback.py, C6-C8).
+        # Answer content is NOT judged here; it has its own Answer Score
+        # (the average of the per-answer scores) and per-question feedback.
+        overall_strengths, key_improvements = build_confidence_feedback(visual_breakdown, vocal_breakdown)
+    elif ai_provider.available() and evaluations:
+        # Text-only mode has no camera or voice, so there is nothing to say
+        # about confidence: the older AI summary of the answers is kept.
         try:
-            is_text_mode = session.interview_mode and session.interview_mode.upper() == "TEXT"
+            summary_prompt = f"""
+            You are a senior technical interviewer summarizing a mock interview.
+
+            Session Data:
+            - Textual Evaluations (Q&A): {json.dumps(evaluations, indent=2)}
+
+            Provide a highly detailed, constructive, and organized summary of the candidate's performance in {_interview_context(session)}.
+            Focus strictly on technical accuracy, logical reasoning, and depth of knowledge.
+
+            You must provide:
+            1. "overallStrengths": An array of 3-5 specific, detailed bullet points highlighting what the candidate did well.
+            2. "keyImprovements": An array of 3-5 specific, actionable bullet points for areas they need to improve.
+            3. "textualScore": An overall score (0-100) based strictly on technical accuracy.
             
-            if is_text_mode:
-                summary_prompt = f"""
-                You are a senior technical interviewer summarizing a mock interview.
+            Return STRICTLY a JSON object with keys:
+            "overallStrengths" (array of strings), "keyImprovements" (array of strings), "textualScore" (integer)
+            """
 
-                Session Data:
-                - Textual Evaluations (Q&A): {json.dumps(evaluations, indent=2)}
-
-                Provide a highly detailed, constructive, and organized summary of the candidate's performance in {_interview_context(session)}.
-                Focus strictly on technical accuracy, logical reasoning, and depth of knowledge.
-
-                You must provide:
-                1. "overallStrengths": An array of 3-5 specific, detailed bullet points highlighting what the candidate did well.
-                2. "keyImprovements": An array of 3-5 specific, actionable bullet points for areas they need to improve.
-                3. "textualScore": An overall score (0-100) based strictly on technical accuracy.
-                
-                Return STRICTLY a JSON object with keys:
-                "overallStrengths" (array of strings), "keyImprovements" (array of strings), "textualScore" (integer)
-                """
-            else:
-                summary_prompt = f"""
-                You are a senior technical interviewer summarizing a mock interview.
-
-                Session Data:
-                - Textual Evaluations (Q&A): {json.dumps(evaluations, indent=2)}
-                - Visual Confidence Average (from camera, measured by facial-landmark
-                  tracking - for your context only, do not re-score this): {avg_visual}/100
-                - Vocal Delivery Metrics (measured from audio, for your context only,
-                  do not re-score this): {vocal_context}
-
-                Provide a highly detailed, constructive, and organized summary of the candidate's performance in {_interview_context(session)}.
-                
-                You must provide:
-                1. "overallStrengths": An array of 3-5 specific, detailed bullet points highlighting what the candidate did well technically and communicatively (you may reference the visual/vocal context above descriptively).
-                2. "keyImprovements": An array of 3-5 specific, actionable bullet points for areas they need to improve.
-                3. "textualScore": based on technical accuracy and depth of their spoken/written answers ONLY.
-                
-                Return STRICTLY a JSON object with keys:
-                "overallStrengths" (array of strings), "keyImprovements" (array of strings), "textualScore" (integer)
-                """
-            
             summary_data, summary_engine = await run_in_threadpool(
                 ai_provider.generate_json, summary_prompt, 0.4, "summary")
             if isinstance(summary_data, dict):
@@ -877,8 +914,9 @@ async def end_interview_session(data: dict, client=None, db=None):
     # content/textual score indicates a genuine knowledge gap; behavioral
     # weaknesses (visual/vocal) already have actionable tips via the
     # Progress Tracker's Focus Area feature.
-    if session.role == GENERAL_INTERVIEW_ROLE:
-        # Learning resources are role-based; a General Interview has no role.
+    if session.role in (GENERAL_INTERVIEW_ROLE, CUSTOM_PRACTICE_ROLE):
+        # Learning resources are role-based; General Interview and Custom
+        # Practice have no role.
         recommended_resources = {"triggered": False, "resources": [], "reason": None}
     else:
         recommended_resources = get_recommended_resources(session.role, textual_score)
