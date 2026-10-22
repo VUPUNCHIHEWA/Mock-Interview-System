@@ -18,14 +18,18 @@ explanation and worked examples, and SOURCES.md for the references).
               = words in the transcript / (answer time - long-pause time).
               Long pauses (>= 3 s) are left out because the Long Pauses
               factor already measures them (no double counting).
-   Score:     listeners' mean confidence ratings in Guyer et al. (2025,
-              Experiment 1), rescaled so the best-rated speed = 100:
-                113 WPM -> 40   (rating 2.95 of 7)
-                148 WPM -> 76   (rating 4.70)
-                192 WPM -> 100  (rating 5.89, highest)
-                197 WPM -> 90   (rating 5.39)
-              straight lines between; below 113 -> 40 and above 197 -> 90
-              (no data outside the tested speeds, so nothing is invented).
+   Score:     0-100, straight lines between six points (B29):
+                 74 WPM -> 0    slow end: Guyer's 113->148 line extended
+                                down to rating 1 (lowest on the 1-7 scale)
+                113 WPM -> 40   (rating 2.95 of 7)   Guyer et al. (2025,
+                148 WPM -> 76   (rating 4.70)        Experiment 1) ratings,
+                192 WPM -> 100  (rating 5.89, best)  rescaled:
+                197 WPM -> 90   (rating 5.39)        100 x (rating-1)/(5.89-1)
+                300 WPM -> 0    fast end: listeners' comprehension drops
+                                sharply above about 275-300 WPM (S49, S50)
+              Below 74 -> 0, above 300 -> 0. Outside the tested speeds the
+              fast side loses 0.87 points per WPM, the slow side 1.03, so
+              fast speech is penalised less than slow speech.
    Label:     Slow (< 148), Good (148-197), Fast (> 197).
    N/A:       less than 10 s of speaking time in the session.
 
@@ -43,11 +47,14 @@ explanation and worked examples, and SOURCES.md for the references).
               voice pitch (F0) / mean pitch, in 10-second pieces of the
               answer, averaged. Dividing by the speaker's own mean pitch
               makes it fair for low and high voices.
-   Score:     PVQ >= 0.15 -> 100   (Hincks: below 0.15 was rated monotone;
-                                     she suggests rewarding variation above
-                                     15% of the mean pitch)
-              PVQ <= 0.06 -> 0     (the lowest PVQ observed in her data)
-              in between  -> straight line (e.g. 0.105 -> 50)
+   Score:     0-100, a straight line between two points (B4), both PVQ
+              values from Hincks (2005):
+                PVQ <= 0.06 -> 0    lowest PVQ in any 10-s sample (most monotone)
+                PVQ >= 0.15 -> 100  below 0.15 was rated monotone; she
+                                    suggests rewarding variation above 15%
+                in between  -> 100 x (PVQ - 0.06) / 0.09  (e.g. 0.105 -> 50)
+              No penalty for high variation: in her data more variation was
+              rated MORE lively and no upper limit was given.
    Pitch search range 60-500 Hz = Hincks' male (60-400 Hz) and female
    (120-500 Hz) ranges combined.
 
@@ -80,9 +87,12 @@ import numpy as np
 FILLER_WORDS = ["um", "uh", "ah", "like", "you know", "basically",
                 "actually", "so", "i mean"]
 
-# --- Speech rate (S42 Guyer et al., 2025, Experiment 1 means) ---
-SPEECH_RATE_POINTS = [113.0, 148.0, 192.0, 197.0]   # words per minute (tested speeds)
-SPEECH_RATE_SCORES = [40.0, 76.0, 100.0, 90.0]      # = rating rescaled to the best (5.89)
+# --- Speech rate (B29; S42 Guyer et al., 2025, Experiment 1 means; S49, S50) ---
+# 74 = slow end (Guyer line 113->148 extended to rating 1 -> score 0)
+# 113 / 148 / 192 / 197 = speeds tested by Guyer et al. (ratings rescaled)
+# 300 = fast end (comprehension drops sharply above ~275-300 WPM -> score 0)
+SPEECH_RATE_POINTS = [74.0, 113.0, 148.0, 192.0, 197.0, 300.0]  # words per minute
+SPEECH_RATE_SCORES = [0.0, 40.0, 76.0, 100.0, 90.0, 0.0]       # score at each point
 SPEECH_RATE_GOOD_MIN = 148.0      # below -> "Slow"
 SPEECH_RATE_GOOD_MAX = 197.0      # above -> "Fast"
 MIN_RATE_SPEAKING_SECONDS = 10.0  # less speaking time -> N/A (B30)
@@ -98,8 +108,11 @@ LONG_PAUSE_THRESHOLD_SECONDS = 3.0
 SILENCE_TOP_DB = 30            # librosa silence detection (ASSUMPTION B7, unchanged)
 
 # --- Pitch variation (S35, Hincks 2005) ---
-PVQ_FULL_MARKS = 0.15          # at or above -> 100
-PVQ_ZERO = 0.06                # at or below -> 0
+PVQ_ZERO = 0.06                # at or below -> 0   (lowest 10-s PVQ in Hincks' data)
+PVQ_FULL_MARKS = 0.15          # at or above -> 100 (below = rated monotone;
+                               #  "reward ... more than 15% of the mean")
+PVQ_POINTS = [PVQ_ZERO, PVQ_FULL_MARKS]
+PVQ_SCORES = [0.0, 100.0]
 PITCH_FMIN_HZ = 60.0
 PITCH_FMAX_HZ = 500.0
 PVQ_SEGMENT_SECONDS = 10.0
@@ -256,9 +269,9 @@ def analyze_voice(transcript: str, wav_path: str) -> dict:
 # Scores
 # ---------------------------------------------------------------------------
 def speech_rate_score(wpm):
-    """Guyer et al. (2025) ratings rescaled: 113 -> 40, 148 -> 76, 192 -> 100,
-    197 -> 90; straight lines between; np.interp keeps 40 below 113 and 90
-    above 197 (no values are invented outside the tested speeds)."""
+    """0-100 score: straight lines between 74 -> 0, 113 -> 40, 148 -> 76,
+    192 -> 100, 197 -> 90, 300 -> 0 (B29, SPEECH_RATE_SCORING.md).
+    np.interp gives 0 below 74 WPM and above 300 WPM."""
     if wpm is None:
         return None
     return round1(float(np.interp(wpm, SPEECH_RATE_POINTS, SPEECH_RATE_SCORES)))
@@ -303,8 +316,22 @@ def long_pause_score(long_pause_share):
     return round1(max(0.0, min(100.0, 100.0 * (1.0 - long_pause_share))))
 
 
+def pitch_label(pvq):
+    """Low (< 0.15, rated monotone in Hincks 2005), Good (0.15 or more)."""
+    if pvq is None:
+        return None
+    if pvq < PVQ_FULL_MARKS:
+        return "Low"
+    return "Good"
+
+
 def pitch_score(pvq):
-    return _linear_score(pvq, PVQ_ZERO, PVQ_FULL_MARKS)
+    """0-100 score: straight line 0.06 -> 0, 0.15 -> 100 (B4,
+    PITCH_VARIATION_SCORING.md). np.interp gives 0 at or below 0.06 and 100
+    at or above 0.15."""
+    if pvq is None:
+        return None
+    return round1(float(np.interp(pvq, PVQ_POINTS, PVQ_SCORES)))
 
 
 def compute_session_vocal(responses) -> dict:
@@ -368,6 +395,7 @@ def compute_session_vocal(responses) -> dict:
             "unit": "PVQ",
             "fullMarksAtOrAbove": PVQ_FULL_MARKS,
             "zeroAtOrBelow": PVQ_ZERO,
+            "label": pitch_label(pvq),
         },
         "answerSeconds": round(total_seconds, 1),
     }

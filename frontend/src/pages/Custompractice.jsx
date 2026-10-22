@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { ListPlus, Upload, X, ChevronRight, Info, Shuffle, Mic, Camera, AlertTriangle, History } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { Upload, X, ArrowRight, Shuffle, Mic, Camera, History } from 'lucide-react';
+import { PageHeader, Card, Alert, btn, inputClass } from '../components/Ui';
 
 // ---------------------------------------------------------------------------
 // Custom Practice - SUPPORTING FEATURE (not part of the core study).
@@ -16,6 +17,7 @@ import { ListPlus, Upload, X, ChevronRight, Info, Shuffle, Mic, Camera, AlertTri
 //
 // Rules (must match backend custom_practice.py): 3-10 questions, each
 // 10-300 characters, duplicates removed. Asked in a random order.
+// UI redesign (Oct 2026): same rules and behaviour, new page style.
 // ---------------------------------------------------------------------------
 
 const MIN_QUESTIONS = 3;
@@ -112,89 +114,80 @@ const CustomPractice = () => {
         navigate('/InterviewSetup', { state: { customQuestions: questions } });
     };
 
-    return (
-        <div className="animate-in fade-in slide-in-from-bottom-4 duration-700 space-y-6 max-w-5xl mx-auto">
-            {/* Top-right corner: open the list of earlier Custom Practice reports. */}
-            <div className="flex justify-end">
-                <button
-                    onClick={() => navigate('/practice-history')}
-                    className="inline-flex items-center gap-2 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 px-4 py-2.5 rounded-xl text-[11px] font-black uppercase tracking-widest shadow-sm transition-all active:scale-95"
-                >
-                    <History size={15} className="text-blue-500" /> Practice History
-                </button>
-            </div>
-            <header className="bg-white/80 backdrop-blur-md p-8 rounded-[2.5rem] border border-white shadow-xl shadow-slate-200/50">
-                <div className="flex items-center gap-3">
-                    <div className="w-11 h-11 rounded-2xl bg-blue-600 text-white flex items-center justify-center shadow-lg shadow-blue-200">
-                        <ListPlus size={20} />
-                    </div>
-                    <div>
-                        <h1 className="text-2xl font-black text-slate-800 tracking-tight">Custom Practice</h1>
-                        <p className="text-slate-400 font-medium uppercase text-[10px] tracking-widest">Practise with your own questions</p>
-                    </div>
-                </div>
-                <p className="text-sm text-slate-500 font-medium mt-4 leading-relaxed max-w-3xl">
-                    Add questions for the IT role you are preparing for. They will be read aloud one by one, you answer by
-                    voice, and at the end you get your Confidence Score, confidence feedback and an AI check of your answers.
-                </p>
-                <div className="flex flex-wrap gap-2 mt-4">
-                    <span className="inline-flex items-center gap-1.5 bg-slate-100 text-slate-600 text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full"><Mic size={12} /> Voice answers</span>
-                    <span className="inline-flex items-center gap-1.5 bg-slate-100 text-slate-600 text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full"><Camera size={12} /> Camera on</span>
-                    <span className="inline-flex items-center gap-1.5 bg-slate-100 text-slate-600 text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full"><Shuffle size={12} /> Random order</span>
-                </div>
-            </header>
+    const countOk = questions.length >= MIN_QUESTIONS && questions.length <= MAX_QUESTIONS;
 
-            <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+    return (
+        <div>
+            <PageHeader
+                eyebrow="Supporting feature"
+                title="Custom practice"
+                description="Add questions for the IT role you are preparing for. They are read aloud one by one, you answer by voice, and at the end you get your Confidence Score, confidence feedback and an AI check of your answers."
+                actions={
+                    <Link to="/practice-history" className={btn.secondary}>
+                        <History size={16} /> Practice history
+                    </Link>
+                }
+            >
+                <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-600">
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1"><Mic size={13} /> Voice answers</span>
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1"><Camera size={13} /> Camera on</span>
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1"><Shuffle size={13} /> Random order</span>
+                </div>
+            </PageHeader>
+
+            <div className="mt-6 grid gap-6 lg:grid-cols-5">
                 {/* Input */}
-                <div className="lg:col-span-3 bg-white p-6 md:p-8 rounded-[2rem] border border-slate-100 shadow-sm">
-                    <div className="flex items-center justify-between gap-3 mb-3">
-                        <h2 className="text-sm font-black uppercase tracking-widest text-slate-800">Your questions</h2>
-                        <button
-                            onClick={() => fileRef.current?.click()}
-                            className="inline-flex items-center gap-2 bg-slate-900 hover:bg-slate-700 text-white px-4 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all active:scale-95"
-                        >
-                            <Upload size={14} /> Upload .txt / .csv
+                <Card className="p-5 sm:p-6 lg:col-span-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                            <h2 className="text-base font-semibold text-slate-900">Your questions</h2>
+                            <p className="mt-0.5 text-sm text-slate-500">One question per line. Numbers and bullets at the start are removed.</p>
+                        </div>
+                        <button type="button" onClick={() => fileRef.current?.click()} className={`${btn.secondary} py-2`}>
+                            <Upload size={15} /> Upload .txt / .csv
                         </button>
                         <input ref={fileRef} type="file" accept=".txt,.csv,text/plain,text/csv" className="hidden" onChange={onFile} />
                     </div>
-                    <p className="text-xs text-slate-400 font-medium mb-3">One question per line. Numbers and bullets at the start are removed.</p>
+                    <label htmlFor="cp-questions" className="sr-only">Your questions</label>
                     <textarea
+                        id="cp-questions"
                         value={text}
                         onChange={(e) => setText(e.target.value)}
                         placeholder={EXAMPLE}
                         rows={12}
-                        className="w-full rounded-2xl border border-slate-200 bg-slate-50/60 p-4 text-sm text-slate-700 font-medium leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white resize-y"
+                        className={`${inputClass} mt-4 resize-y leading-relaxed`}
                     />
-                    {fileError && (
-                        <p className="mt-2 text-xs font-semibold text-red-600 flex items-center gap-1.5"><AlertTriangle size={13} /> {fileError}</p>
-                    )}
+                    {fileError && <Alert tone="error" className="mt-3">{fileError}</Alert>}
                     {!text.trim() && (
-                        <button onClick={() => setText(EXAMPLE)} className="mt-2 text-xs font-bold text-blue-600 hover:underline">
+                        <button type="button" onClick={() => setText(EXAMPLE)} className="mt-3 text-sm font-medium text-blue-600 hover:text-blue-700">
                             Use the example questions
                         </button>
                     )}
-                </div>
+                </Card>
 
                 {/* Preview + start */}
-                <div className="lg:col-span-2 space-y-4">
-                    <div className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm">
-                        <div className="flex items-center justify-between mb-3">
-                            <h2 className="text-sm font-black uppercase tracking-widest text-slate-800">Preview</h2>
-                            <span className={`text-[11px] font-black ${questions.length >= MIN_QUESTIONS && questions.length <= MAX_QUESTIONS ? 'text-emerald-600' : 'text-slate-400'}`}>
+                <div className="space-y-4 lg:col-span-2">
+                    <Card className="p-5">
+                        <div className="flex items-center justify-between">
+                            <h2 className="text-base font-semibold text-slate-900">Preview</h2>
+                            <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${countOk ? 'bg-green-50 text-green-700' : 'bg-slate-100 text-slate-500'}`}>
                                 {questions.length} / {MAX_QUESTIONS}
                             </span>
                         </div>
                         {questions.length === 0 ? (
-                            <p className="text-sm text-slate-400 font-medium">Your questions will appear here.</p>
+                            <p className="mt-3 text-sm text-slate-500">Your questions will appear here.</p>
                         ) : (
-                            <ul className="space-y-2 max-h-80 overflow-y-auto pr-1">
+                            <ul className="mt-3 max-h-80 space-y-2 overflow-y-auto pr-1">
                                 {questions.map((q, i) => {
                                     const bad = q.length < MIN_CHARS || q.length > MAX_CHARS || i >= MAX_QUESTIONS;
                                     return (
-                                        <li key={`${i}-${q}`} className={`flex items-start gap-2 p-3 rounded-xl border text-sm font-medium ${bad ? 'border-red-200 bg-red-50 text-red-700' : 'border-slate-100 bg-slate-50 text-slate-700'}`}>
-                                            <span className="text-[10px] font-black text-slate-400 mt-0.5 w-4 shrink-0">{i + 1}</span>
+                                        <li
+                                            key={`${i}-${q}`}
+                                            className={`flex items-start gap-2.5 rounded-lg border px-3 py-2.5 text-sm ${bad ? 'border-red-200 bg-red-50 text-red-700' : 'border-slate-200 bg-slate-50 text-slate-700'}`}
+                                        >
+                                            <span className="mt-0.5 w-4 shrink-0 text-xs font-medium text-slate-400">{i + 1}</span>
                                             <span className="flex-1 break-words">{q}</span>
-                                            <button onClick={() => removeQuestion(i)} className="text-slate-300 hover:text-red-500 shrink-0" aria-label="Remove question">
+                                            <button type="button" onClick={() => removeQuestion(i)} className="shrink-0 rounded p-0.5 text-slate-400 hover:text-red-600" aria-label="Remove question">
                                                 <X size={15} />
                                             </button>
                                         </li>
@@ -202,29 +195,18 @@ const CustomPractice = () => {
                                 })}
                             </ul>
                         )}
-                    </div>
+                    </Card>
 
-                    <div className="bg-blue-50/60 border border-blue-100 rounded-2xl p-4 flex gap-2 items-start">
-                        <Info size={15} className="text-blue-500 shrink-0 mt-0.5" />
-                        <p className="text-[11px] text-blue-900/80 font-medium leading-relaxed">
-                            {MIN_QUESTIONS}-{MAX_QUESTIONS} questions. They are asked in a random order, so you cannot
-                            just read out prepared answers. Practice reports are saved in Practice History, separate
-                            from My Interviews and your progress.
-                        </p>
-                    </div>
+                    <Alert tone="info">
+                        {MIN_QUESTIONS}–{MAX_QUESTIONS} questions, each {MIN_CHARS}–{MAX_CHARS} characters. They are asked in a random
+                        order, so you cannot just read out prepared answers. Reports are saved in Practice history, separate from My
+                        interviews and your progress.
+                    </Alert>
 
-                    {problem && questions.length > 0 && (
-                        <p className="text-xs font-semibold text-orange-600 flex items-center gap-1.5"><AlertTriangle size={13} /> {problem}</p>
-                    )}
+                    {problem && questions.length > 0 && <Alert tone="warning">{problem}</Alert>}
 
-                    <button
-                        onClick={start}
-                        disabled={!!problem}
-                        className={`w-full py-4 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2 ${problem
-                            ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
-                            : 'bg-emerald-500 hover:bg-emerald-600 text-white active:scale-95 shadow-lg shadow-emerald-200'}`}
-                    >
-                        Continue to camera &amp; mic check <ChevronRight size={14} />
+                    <button type="button" onClick={start} disabled={!!problem} className={`${btn.primary} w-full py-3`}>
+                        Continue to camera &amp; mic check <ArrowRight size={16} />
                     </button>
                 </div>
             </div>

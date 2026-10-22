@@ -1,18 +1,179 @@
-import React from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
-import { CircularProgressbar, buildStyles } from 'react-circular-progressbar';
-import 'react-circular-progressbar/dist/styles.css';
-import { LayoutDashboard, Target, CheckCircle, TrendingUp, AlertCircle, ChevronDown, ChevronUp, GraduationCap, ExternalLink, ClipboardCheck, Lightbulb, Eye, Mic } from 'lucide-react';
-import { useState } from 'react';
+import React, { useState } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import axios from 'axios';
+import {
+    ArrowLeft, Video, AlertCircle, ChevronDown, Lightbulb, Eye, Mic, ExternalLink,
+    GraduationCap, Clock, RefreshCw, CheckCircle2, TrendingUp, FileText, Ruler, Info, ListPlus,
+} from 'lucide-react';
 
+const API = "http://localhost:8000";
+
+// ---------------------------------------------------------------------------
+// Results page (UI redesign 2026-10-21).
+// Order: Confidence Score (main) -> Visual / Vocal parts with their factors
+// -> Answer score (secondary) -> confidence strengths / how to improve ->
+// question-by-question breakdown. The data and the "Evaluate now" re-check
+// are unchanged. The AI-predicted confidence level badge is not shown
+// (ASSUMPTIONS I18, I22).
+// ---------------------------------------------------------------------------
+
+const hasValue = (v) => v !== null && v !== undefined && !Number.isNaN(v);
+
+// Same thresholds as before: 80+ strong, 60-79 fair, below 60 weak
+const scoreTone = (score) => {
+    if (!hasValue(score)) return { bar: 'bg-slate-300', text: 'text-slate-400', soft: 'bg-slate-100 text-slate-600' };
+    if (score >= 80) return { bar: 'bg-green-500', text: 'text-green-600', soft: 'bg-green-50 text-green-700' };
+    if (score >= 60) return { bar: 'bg-amber-500', text: 'text-amber-600', soft: 'bg-amber-50 text-amber-700' };
+    return { bar: 'bg-red-500', text: 'text-red-600', soft: 'bg-red-50 text-red-700' };
+};
+
+const fmtNum = (v) => (hasValue(v) ? Math.round(v) : '—');
+
+// ---------------------------------------------------------------------------
+// Small UI pieces
+// ---------------------------------------------------------------------------
+const Card = ({ className = '', children }) => (
+    <section className={`rounded-xl border border-slate-200 bg-white ${className}`}>{children}</section>
+);
+
+const ScoreRing = ({ value, size = 152 }) => {
+    const r = 52;
+    const c = 2 * Math.PI * r;
+    const v = hasValue(value) ? Math.max(0, Math.min(100, value)) : 0;
+    return (
+        <div className="relative shrink-0" style={{ width: size, height: size }}>
+            <svg viewBox="0 0 120 120" className="h-full w-full -rotate-90">
+                <circle cx="60" cy="60" r={r} fill="none" stroke="#e2e8f0" strokeWidth="10" />
+                {hasValue(value) && (
+                    <circle
+                        cx="60" cy="60" r={r} fill="none" stroke="#2563eb" strokeWidth="10" strokeLinecap="round"
+                        strokeDasharray={c} strokeDashoffset={c * (1 - v / 100)}
+                    />
+                )}
+            </svg>
+            <div className="absolute inset-0 grid place-items-center text-center">
+                <div>
+                    <p className="text-4xl font-bold tracking-tight text-slate-900">{fmtNum(value)}</p>
+                    <p className="-mt-0.5 text-xs text-slate-500">out of 100</p>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const Bar = ({ value, className = 'h-2' }) => (
+    <div className={`w-full overflow-hidden rounded-full bg-slate-100 ${className}`}>
+        {hasValue(value) && (
+            <div className={`h-full rounded-full ${scoreTone(value).bar}`} style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
+        )}
+    </div>
+);
+
+// One factor row (Eye Contact, Speech Rate, ...)
+const FactorRow = ({ label, score, detail }) => (
+    <div>
+        <div className="flex items-baseline justify-between gap-3 text-sm">
+            <span className="text-slate-700">{label}</span>
+            <span className={`font-semibold ${scoreTone(score).text}`}>{hasValue(score) ? Math.round(score) : 'N/A'}</span>
+        </div>
+        <Bar value={score} className="mt-1.5 h-1.5" />
+        {detail && <p className="mt-1 text-xs text-slate-500">{detail}</p>}
+    </div>
+);
+
+// Visual / Vocal card
+const PartCard = ({ icon, title, score, missingText, factors, children }) => {
+    const Icon = icon;
+    return (
+    <Card className="p-5">
+        <div className="flex items-center justify-between gap-3">
+            <p className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                <span className="grid h-8 w-8 place-items-center rounded-lg bg-blue-50 text-blue-600"><Icon size={16} /></span>
+                {title}
+            </p>
+            <p className="text-2xl font-bold text-slate-900">{hasValue(score) ? Math.round(score) : '—'}</p>
+        </div>
+        {hasValue(score) ? <Bar value={score} className="mt-3 h-2" /> : <p className="mt-2 text-xs text-slate-500">{missingText}</p>}
+        {factors.length > 0 && (
+            <div className="mt-4 space-y-3.5 border-t border-slate-100 pt-4">
+                {factors.map(f => <FactorRow key={f.label} {...f} />)}
+            </div>
+        )}
+        {children}
+    </Card>
+    );
+};
+
+// One strength / improvement point. Confidence items are objects:
+// { factor, group, score, measured, message, tip, priority }.
+const FeedbackItem = ({ item, kind }) => {
+    if (typeof item === 'string') {
+        return <p className="border-l-2 border-slate-200 pl-4 text-sm leading-relaxed text-slate-600">{item}</p>;
+    }
+    const isStrength = kind === 'strength';
+    const GroupIcon = item.group === 'Visual' ? Eye : item.group === 'Vocal' ? Mic : null;
+    const frame = item.priority
+        ? 'border-amber-300 bg-amber-50/60'
+        : isStrength ? 'border-green-200 bg-green-50/40' : 'border-slate-200 bg-white';
+    return (
+        <div className={`rounded-xl border p-4 ${frame}`}>
+            <div className="flex items-start justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                    {GroupIcon && <GroupIcon size={15} className="text-slate-400" />}
+                    <span className="text-sm font-semibold text-slate-900">{item.factor}</span>
+                    {item.group && <span className="text-xs text-slate-500">{item.group}</span>}
+                    {item.priority && (
+                        <span className="rounded-full bg-amber-500 px-2 py-0.5 text-[11px] font-medium text-white">Top priority</span>
+                    )}
+                </div>
+                {hasValue(item.score) && (
+                    <span className={`rounded-md px-2 py-0.5 text-xs font-semibold ${scoreTone(item.score).soft}`}>{Math.round(item.score)}</span>
+                )}
+            </div>
+            <p className="mt-2 text-sm leading-relaxed text-slate-700">{item.message}</p>
+            {item.measured && (
+                <p className="mt-1.5 flex items-start gap-1.5 text-xs text-slate-500">
+                    <Ruler size={13} className="mt-0.5 shrink-0" />
+                    {item.measured}
+                </p>
+            )}
+            {item.tip && (
+                <p className="mt-3 flex gap-2 rounded-lg bg-white/70 px-3 py-2 text-sm text-slate-800 ring-1 ring-slate-200">
+                    <Lightbulb size={16} className="mt-0.5 shrink-0 text-amber-500" />
+                    <span>{item.tip}</span>
+                </p>
+            )}
+        </div>
+    );
+};
+
+const Notice = ({ tone = 'blue', icon = Info, children, action }) => {
+    const Icon = icon;
+    const tones = {
+        blue: 'border-blue-200 bg-blue-50 text-blue-900',
+        amber: 'border-amber-200 bg-amber-50 text-amber-900',
+        slate: 'border-slate-200 bg-slate-50 text-slate-700',
+    };
+    return (
+        <div className={`flex flex-col gap-3 rounded-xl border px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between ${tones[tone]}`}>
+            <div className="flex gap-2.5">
+                <Icon size={16} className="mt-0.5 shrink-0" />
+                <div>{children}</div>
+            </div>
+            {action && <div className="flex shrink-0 gap-2">{action}</div>}
+        </div>
+    );
+};
+
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
 const InterviewResults = () => {
     const location = useLocation();
     const navigate = useNavigate();
     const [results, setResults] = useState((location.state || {}).results);
     const [reEvaluating, setReEvaluating] = useState(false);
     const [reEvalError, setReEvalError] = useState(null);
-
     const [expandedQ, setExpandedQ] = useState(null);
 
     // "Evaluate now": if the AI service was busy / over its limit, some answers
@@ -23,7 +184,7 @@ const InterviewResults = () => {
         setReEvaluating(true);
         setReEvalError(null);
         try {
-            const response = await axios.post("http://localhost:8000/api/end-interview", { sessionId: results.sessionId });
+            const response = await axios.post(`${API}/api/end-interview`, { sessionId: results.sessionId });
             if (response.data.success) setResults(response.data);
             const stillPending = (response.data.evaluations || []).some(e => e.isNotEvaluated);
             if (stillPending) setReEvalError("The AI service is still busy. Please try again a little later.");
@@ -37,29 +198,31 @@ const InterviewResults = () => {
 
     if (!results) {
         return (
-            <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-8">
-                <AlertCircle size={48} className="text-slate-400 mb-4" />
-                <h2 className="text-xl font-bold text-slate-700">No results found.</h2>
-                <button
-                    onClick={() => navigate('/dashboard')}
-                    className="mt-6 bg-blue-600 text-white px-6 py-2 rounded-xl font-bold hover:bg-blue-500"
-                >
-                    Back to Dashboard
-                </button>
+            <div className="flex min-h-[60vh] flex-col items-center justify-center text-center">
+                <span className="grid h-12 w-12 place-items-center rounded-xl bg-slate-100 text-slate-500">
+                    <AlertCircle size={24} />
+                </span>
+                <h1 className="mt-4 text-lg font-semibold text-slate-900">No report to show</h1>
+                <p className="mt-1 max-w-sm text-sm text-slate-500">Open a report from My interviews, or finish an interview to see a new one.</p>
+                <div className="mt-5 flex gap-3">
+                    <Link to="/history" className="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                        My interviews
+                    </Link>
+                    <Link to="/dashboard" className="rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700">
+                        Dashboard
+                    </Link>
+                </div>
             </div>
         );
     }
 
-    const { overallScore, overallStrengths, keyImprovements, evaluations, interviewMode, confidenceLevel, recommendedResources } = results;
+    const { overallScore, overallStrengths, keyImprovements, evaluations, interviewMode, recommendedResources } = results;
 
-    // --- BSc Research Feature (Suggestion #2/#4): session context
-    // (role/difficulty/date) - shown in the header for quick reference
-    // when revisiting a report later (e.g. from History).
     const sessionRole = results.role;
-    const sessionDifficulty = results.difficulty;
+    const isCustom = sessionRole === 'Custom Practice';
     const sessionDate = results.createdAt || results.date;
-    const formattedDate = sessionDate ? new Date(sessionDate).toLocaleDateString(undefined, {
-        year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+    const formattedDate = sessionDate ? new Date(sessionDate).toLocaleString(undefined, {
+        year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
     }) : null;
 
     const isTextMode = interviewMode && interviewMode.toUpperCase() === 'TEXT';
@@ -72,13 +235,11 @@ const InterviewResults = () => {
     const visualBreakdown = results.visualBreakdown;
     const vocalBreakdown = results.vocalBreakdown;
 
-    const hasValue = (v) => v !== null && v !== undefined;
-
-    // Sub-factor rows shown under Visual Confidence and Vocal Delivery.
     const visualFactors = visualBreakdown ? [
-        { label: 'Eye Contact', score: visualBreakdown.eyeContact, detail: 'Looking at the camera' },
-        { label: 'Head Pose', score: visualBreakdown.headPose, detail: 'Head facing forward and steady' },
+        { label: 'Eye contact', score: visualBreakdown.eyeContact, detail: 'Looking at the camera' },
+        { label: 'Head position', score: visualBreakdown.headPose, detail: 'Head facing forward and steady' },
     ] : [];
+
     // New scoring (per minute / % of answer time / PVQ) has a "unit" field;
     // older sessions keep their old wording.
     const isNewVocal = !!(vocalBreakdown?.speechRate?.unit || vocalBreakdown?.fillerWords?.unit);
@@ -88,30 +249,32 @@ const InterviewResults = () => {
     const fw = vocalBreakdown?.fillerWords;
     const firstVocalFactor = sr
         ? {
-            label: 'Speech Rate', score: sr.score,
+            label: 'Speech rate', score: sr.score,
             detail: sr.enoughSpeech === false
                 ? `Not enough speech to score (${sr.speakingSeconds} s of speaking, needs ${sr.minSpeakingSeconds} s).`
-                : hasValue(sr.value) ? `${sr.value} words per minute · ${sr.label}: ${sr.labelText}` : null
+                : hasValue(sr.value) ? `${sr.value} words per minute · ${sr.label}: ${sr.labelText}` : null,
         }
         : {
-            label: 'Filler Words (older scoring)', score: fw?.score,
+            label: 'Filler words (older scoring)', score: fw?.score,
             detail: !hasValue(fw?.value) ? null : fw.unit
-                ? `${fw.value} per minute (100% at ${fw.fullMarksAtOrBelow} or fewer, 0% at ${fw.zeroAtOrAbove} or more)`
-                : `Avg ${fw.value} per answer (older scoring)`
+                ? `${fw.value} per minute (100 at ${fw.fullMarksAtOrBelow} or fewer, 0 at ${fw.zeroAtOrAbove} or more)`
+                : `Avg ${fw.value} per answer (older scoring)`,
         };
     const vocalFactors = vocalBreakdown ? [
         firstVocalFactor,
         {
-            label: 'Long Pauses', score: vocalBreakdown.longPauses?.score,
+            label: 'Long pauses', score: vocalBreakdown.longPauses?.score,
             detail: !hasValue(vocalBreakdown.longPauses?.value) ? null : isNewVocal
                 ? `${vocalBreakdown.longPauses.value}% of answer time in pauses of ${vocalBreakdown.longPauses.minPauseSeconds}s or longer`
-                : `Avg ${vocalBreakdown.longPauses.value} long pauses per answer (older scoring)`
+                : `Avg ${vocalBreakdown.longPauses.value} long pauses per answer (older scoring)`,
         },
         {
-            label: 'Pitch Variation', score: vocalBreakdown.pitchVariation?.score,
+            // Pitch Variation (PITCH_VARIATION_SCORING.md): 0 at PVQ 0.06 or less,
+            // 100 at 0.15 or more (Hincks, 2005). Label: Low (< 15%) / Good.
+            label: 'Pitch variation', score: vocalBreakdown.pitchVariation?.score,
             detail: !hasValue(vocalBreakdown.pitchVariation?.value) ? null : isNewVocal
-                ? `Variation ${Math.round(vocalBreakdown.pitchVariation.value * 100)}% of your average pitch (100% at ${Math.round(vocalBreakdown.pitchVariation.fullMarksAtOrAbove * 100)}% or more)`
-                : `${vocalBreakdown.pitchVariation.value} Hz (older scoring)`
+                ? `Variation ${Math.round(vocalBreakdown.pitchVariation.value * 100)}% of your average pitch${vocalBreakdown.pitchVariation.label ? ` · ${vocalBreakdown.pitchVariation.label}` : ''} (100 at ${Math.round(vocalBreakdown.pitchVariation.fullMarksAtOrAbove * 100)}% or more)`
+                : `${vocalBreakdown.pitchVariation.value} Hz (older scoring)`,
         },
     ] : [];
 
@@ -121,441 +284,290 @@ const InterviewResults = () => {
     const toList = (v) => Array.isArray(v) ? v : (v ? [v] : []);
     const strengthItems = toList(overallStrengths);
     const improvementItems = toList(keyImprovements);
-    // Plain-text points in a camera/voice report = an older AI summary (saved
-    // before confidence-only feedback, or the backend is still the old code).
     const isOldFeedbackFormat = !isTextMode && [...strengthItems, ...improvementItems].some(i => typeof i === 'string');
-
-    const getScoreColor = (score) => {
-        if (score >= 80) return '#4ade80';
-        if (score >= 60) return '#fb923c';
-        return '#f87171';
-    };
-
-    const FactorBar = ({ label, score, detail }) => (
-        <div className="pl-3 border-l-2 border-slate-100">
-            <div className="flex justify-between text-[10px] font-semibold mb-1 text-slate-400">
-                <span>{label}</span>
-                <span className="text-slate-600 font-bold">{hasValue(score) ? `${Math.round(score)}%` : 'N/A'}</span>
-            </div>
-            <div className="h-1 w-full bg-slate-100 rounded-full overflow-hidden">
-                <div className="h-full transition-all duration-1000" style={{ width: `${score ?? 0}%`, backgroundColor: getScoreColor(score ?? 0) }}></div>
-            </div>
-            {detail && <p className="text-[9px] text-slate-400 mt-0.5">{detail}</p>}
-        </div>
-    );
 
     const noFeedbackText = isTextMode
         ? 'No feedback available.'
         : 'No camera or voice measurements were recorded, so confidence feedback cannot be given.';
 
-    // One strength / improvement point. Confidence items are objects:
-    // { factor, group, score, measured, message, tip, priority }.
-    const FeedbackItem = ({ item, kind }) => {
-        if (typeof item === 'string') {
-            return <p className="text-slate-600 leading-relaxed font-medium pl-4 border-l-2 border-slate-100">{item}</p>;
-        }
-        const isStrength = kind === 'strength';
-        const GroupIcon = item.group === 'Visual' ? Eye : item.group === 'Vocal' ? Mic : null;
-        return (
-            <div className={`p-4 rounded-2xl border ${item.priority ? 'border-orange-200 bg-orange-50/60' : isStrength ? 'border-green-100 bg-green-50/40' : 'border-slate-100 bg-slate-50/60'}`}>
-                <div className="flex items-center justify-between gap-3 mb-1.5">
-                    <div className="flex items-center gap-2 flex-wrap">
-                        {GroupIcon && <GroupIcon size={14} className="text-slate-400" />}
-                        <span className="text-sm font-black text-slate-800">{item.factor}</span>
-                        {item.group && <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">{item.group}</span>}
-                        {item.priority && (
-                            <span className="text-[9px] font-black uppercase tracking-widest bg-orange-500 text-white px-2 py-0.5 rounded-full">Top priority</span>
-                        )}
-                    </div>
-                    {hasValue(item.score) && (
-                        <span className="text-xs font-black" style={{ color: getScoreColor(item.score) }}>{Math.round(item.score)}%</span>
-                    )}
-                </div>
-                <p className="text-sm text-slate-600 leading-relaxed font-medium">{item.message}</p>
-                {item.measured && <p className="text-[11px] text-slate-400 font-semibold mt-1">📏 {item.measured}</p>}
-                {item.tip && (
-                    <p className="text-[13px] text-slate-700 font-semibold mt-2 flex gap-2">
-                        <Lightbulb size={15} className="text-amber-500 shrink-0 mt-0.5" />
-                        <span>{item.tip}</span>
-                    </p>
-                )}
-            </div>
-        );
-    };
-
-    const getConfidenceBadgeStyle = (level) => {
-        if (level === 'High Confidence') {
-            return { bg: 'bg-green-50', text: 'text-green-700', border: 'border-green-200', icon: '🟢' };
-        }
-        if (level === 'Moderate Confidence') {
-            return { bg: 'bg-orange-50', text: 'text-orange-700', border: 'border-orange-200', icon: '🟠' };
-        }
-        if (level === 'Low Confidence') {
-            return { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-200', icon: '🔴' };
-        }
-        return { bg: 'bg-slate-50', text: 'text-slate-500', border: 'border-slate-200', icon: '⚪' };
-    };
+    const evalList = evaluations || [];
+    const notEvaluatedCount = evalList.filter(e => e.isNotEvaluated).length;
 
     return (
-        <div className="min-h-screen bg-slate-50/50 p-4 md:p-8 animate-in fade-in duration-700">
-            <div className="max-w-5xl mx-auto space-y-8">
-
-                <div className="flex justify-between items-center">
-                    <button
-                        onClick={() => navigate('/dashboard')}
-                        className="group flex items-center gap-2 text-slate-400 hover:text-slate-900 transition-all font-bold text-[10px] uppercase tracking-[0.2em]"
-                    >
-                        <LayoutDashboard size={14} className="group-hover:-translate-x-1 transition-transform" /> Back to Dashboard
-                    </button>
-                    <div className="bg-white px-4 py-2 rounded-xl border border-slate-100 shadow-sm flex items-center gap-2">
-                        <Target size={14} className="text-blue-500" />
-                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Interview Summary</span>
-                    </div>
-                </div>
-
-                <div className="text-center mb-8">
-                    <h1 className="text-4xl font-black text-slate-900 tracking-tighter uppercase italic">{isTextMode ? 'Performance Report' : 'Confidence Report'}</h1>
-                    <p className="text-slate-500 mt-2 font-medium">
+        <div>
+            {/* Header */}
+            <Link
+                to={isCustom ? '/practice-history' : '/history'}
+                className="inline-flex items-center gap-1.5 text-sm text-slate-500 transition-colors hover:text-slate-800"
+            >
+                <ArrowLeft size={16} />
+                {isCustom ? 'Practice history' : 'My interviews'}
+            </Link>
+            <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                    <h1 className="text-2xl font-bold tracking-tight text-slate-900">
+                        {isTextMode ? 'Performance report' : 'Confidence report'}
+                    </h1>
+                    <p className="mt-1 text-sm text-slate-500">
                         {isTextMode
-                            ? 'Detailed breakdown of your technical mock interview.'
+                            ? 'A breakdown of your answers in this mock interview.'
                             : 'How confident you came across on camera and in your voice, and what to work on next.'}
                     </p>
-                    {/* Suggestion #2/#4: role/difficulty/date context */}
-                    {(sessionRole || sessionDifficulty || formattedDate) && (
-                        <div className="flex flex-wrap justify-center gap-2 mt-4">
-                            {sessionRole && (
-                                <span className="bg-slate-900 text-white text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full">{sessionRole}</span>
-                            )}
-                            {sessionDifficulty && (
-                                <span className="bg-orange-100 text-orange-700 text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full">{sessionDifficulty}</span>
-                            )}
-                            {formattedDate && (
-                                <span className="bg-slate-100 text-slate-500 text-[10px] font-bold px-3 py-1.5 rounded-full">{formattedDate}</span>
-                            )}
+                    {(sessionRole || formattedDate) && (
+                        <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                            {sessionRole && <span className="rounded-full bg-slate-900 px-2.5 py-1 font-medium text-white">{sessionRole}</span>}
+                            {results.difficulty && <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">{results.difficulty}</span>}
+                            {formattedDate && <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">{formattedDate}</span>}
                         </div>
                     )}
                 </div>
+                <button
+                    type="button"
+                    onClick={() => navigate(isCustom ? '/custom-practice' : '/InterviewSetup')}
+                    className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-blue-700"
+                >
+                    {isCustom ? <ListPlus size={16} /> : <Video size={16} />}
+                    {isCustom ? 'Practise again' : 'New interview'}
+                </button>
+            </div>
 
-                {/* Custom Practice (supporting feature): practice only, not tracked. */}
-                {sessionRole === 'Custom Practice' && (
-                    <div className="bg-blue-50/70 border border-blue-100 rounded-2xl p-4 flex flex-col sm:flex-row items-center gap-3 justify-between">
-                        <p className="text-xs font-semibold text-blue-900/80">
-                            📝 Custom Practice with your own questions. This report is saved in Practice History, separate
-                            from My Interviews and your progress.
-                        </p>
-                        <div className="flex gap-2 shrink-0">
-                            <button
-                                onClick={() => navigate('/practice-history')}
-                                className="bg-white hover:bg-slate-50 border border-blue-200 text-blue-700 px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest"
-                            >
-                                Practice History
-                            </button>
-                            <button
-                                onClick={() => navigate('/custom-practice')}
-                                className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest"
-                            >
-                                Practise again
-                            </button>
-                        </div>
-                    </div>
+            {/* Notices */}
+            <div className="mt-5 space-y-3">
+                {isCustom && (
+                    <Notice icon={ListPlus}>
+                        Custom practice with your own questions. This report is saved in Practice history, separate from
+                        My interviews and your progress.
+                    </Notice>
                 )}
 
-                {/* Some answers could not be checked (AI service busy / over its limit). */}
-                {(evaluations || []).some(e => e.isNotEvaluated) && (
-                    <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-col sm:flex-row items-center gap-3 justify-between">
-                        <p className="text-xs font-semibold text-amber-800">
-                            ⏳ {(evaluations || []).filter(e => e.isNotEvaluated).length} answer(s) could not be checked yet because the AI service was busy.
-                            Your answers and camera/voice scores are saved, and your Confidence Score is already final (it does not depend on this check).
-                            {reEvalError && <span className="block mt-1 text-red-600">{reEvalError}</span>}
-                        </p>
-                        {results.sessionId && (
+                {notEvaluatedCount > 0 && (
+                    <Notice
+                        tone="amber"
+                        icon={Clock}
+                        action={results.sessionId && (
                             <button
+                                type="button"
                                 onClick={reEvaluate}
                                 disabled={reEvaluating}
-                                className="shrink-0 bg-amber-500 hover:bg-amber-600 text-white px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-60"
+                                className="inline-flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-white hover:bg-amber-600 disabled:opacity-60"
                             >
+                                <RefreshCw size={15} className={reEvaluating ? 'animate-spin' : ''} />
                                 {reEvaluating ? 'Checking...' : 'Evaluate now'}
                             </button>
                         )}
-                    </div>
+                    >
+                        {notEvaluatedCount} answer{notEvaluatedCount > 1 ? 's' : ''} could not be checked yet because the AI
+                        service was busy. Your answers and camera/voice scores are saved, and your Confidence Score is already
+                        final (it does not depend on this check).
+                        {reEvalError && <span className="mt-1 block font-medium text-red-600">{reEvalError}</span>}
+                    </Notice>
                 )}
 
-                <div className="grid grid-cols-1 md:grid-cols-12 gap-8">
-
-                    <div className="md:col-span-4 bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm flex flex-col items-center justify-center text-center">
-                        <h3 className="text-xs font-black uppercase tracking-widest text-slate-400 mb-6">{isTextMode ? 'Textual Score' : 'Confidence Score'}</h3>
-                        <div className="w-40 h-40 mb-6">
-                            <CircularProgressbar
-                                value={overallScore ?? 0}
-                                text={overallScore !== null && overallScore !== undefined ? `${overallScore}%` : '—'}
-                                styles={buildStyles({
-                                    pathColor: getScoreColor(overallScore ?? 0),
-                                    textColor: '#0f172a',
-                                    trailColor: '#f1f5f9',
-                                    textSize: '24px'
-                                })}
-                                className="font-black"
-                            />
-                        </div>
-
-                        {!isTextMode && hasValue(results.legacyOverallScore) && (
-                            <p className="text-[10px] text-slate-400 font-medium -mt-2 mb-2">
-                                Older interview: scored with the previous formula (60% answers + 20% camera + 20% voice) = {results.legacyOverallScore}%. Not comparable with the Confidence Score.
-                            </p>
-                        )}
-                        {!isTextMode && (
-                            <p className="text-[10px] text-slate-400 font-medium -mt-2 mb-2">
-                                Average of Visual Confidence and Vocal Delivery (both are needed).
-                            </p>
-                        )}
-                        {!isTextMode && !hasValue(overallScore) && results.confidenceMissingReason && (
-                            <p className="text-[10px] text-amber-600 font-semibold mb-2">
-                                {results.confidenceMissingReason}
-                            </p>
-                        )}
-
-                        {!isTextMode && (
-                            <div className="w-full space-y-3 mt-4 text-left">
-                                <div>
-                                    <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest mb-1 text-slate-500">
-                                        <span>🎥 Visual Confidence</span>
-                                        <span className="text-slate-700">{visualScore !== null && visualScore !== undefined ? `${visualScore}%` : 'N/A - no camera data'}</span>
-                                    </div>
-                                    <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
-                                        <div className="h-full transition-all duration-1000" style={{ width: `${visualScore ?? 0}%`, backgroundColor: getScoreColor(visualScore ?? 0) }}></div>
-                                    </div>
-                                    {visualFactors.length > 0 && (
-                                        <div className="mt-2 space-y-2">
-                                            {visualFactors.map(f => <FactorBar key={f.label} {...f} />)}
-                                            {hasValue(visualBreakdown?.faceNotVisiblePct) && visualBreakdown.faceNotVisiblePct > 0 && (
-                                                <p className="pl-3 text-[9px] font-semibold text-orange-500">
-                                                    ⚠️ Face not visible for {Math.round(visualBreakdown.faceNotVisiblePct)}% of the measured time (counted as 0).
-                                                </p>
-                                            )}
-                                        </div>
-                                    )}
-                                </div>
-                                <div>
-                                    <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest mb-1 text-slate-500">
-                                        <span>🎙️ Vocal Delivery</span>
-                                        <span className="text-slate-700">{vocalScore !== null && vocalScore !== undefined ? `${vocalScore}%` : 'N/A - no voice data'}</span>
-                                    </div>
-                                    <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
-                                        <div className="h-full transition-all duration-1000" style={{ width: `${vocalScore ?? 0}%`, backgroundColor: getScoreColor(vocalScore ?? 0) }}></div>
-                                    </div>
-                                    {vocalFactors.length > 0 && (
-                                        <div className="mt-2 space-y-2">
-                                            {vocalFactors.map(f => <FactorBar key={f.label} {...f} />)}
-                                        </div>
-                                    )}
-                                </div>
-
-                                {results.replacedQuestions > 0 && (
-                                    <div className="mt-3 p-2.5 rounded-xl bg-amber-50 border border-amber-100 text-[10px] text-amber-700 font-semibold">
-                                        🔁 {results.replacedQuestions} question{results.replacedQuestions > 1 ? 's were' : ' was'} replaced because your face was not detected for 30 seconds.
-                                    </div>
-                                )}
-
-                                {/* Answer score: shown separately - NOT part of the Confidence Score. */}
-                                <div className="mt-4 pt-4 border-t border-slate-100">
-                                    <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest mb-1 text-slate-500">
-                                        <span>📝 Answer Score</span>
-                                        <span className="text-slate-700">{hasValue(textualScore) ? `${textualScore}%` : (evaluations || []).some(e => e.isNotEvaluated) ? 'Pending' : 'N/A'}</span>
-                                    </div>
-                                    <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
-                                        <div className="h-full transition-all duration-1000" style={{ width: `${textualScore ?? 0}%`, backgroundColor: getScoreColor(textualScore ?? 0) }}></div>
-                                    </div>
-                                    <p className="text-[9px] text-slate-400 mt-0.5">Content of your answers, checked by AI. Shown separately - not part of the Confidence Score.</p>
-                                </div>
-
-                                {confidenceLevel && confidenceLevel !== 'NOT_AVAILABLE' && (
-                                    <div className={`mt-4 p-3 rounded-xl border ${getConfidenceBadgeStyle(confidenceLevel).bg} ${getConfidenceBadgeStyle(confidenceLevel).border}`}>
-                                        <div className="flex items-center justify-center gap-2">
-                                            <span>{getConfidenceBadgeStyle(confidenceLevel).icon}</span>
-                                            <span className={`text-[11px] font-black uppercase tracking-widest ${getConfidenceBadgeStyle(confidenceLevel).text}`}>
-                                                AI-Predicted Confidence: {confidenceLevel}
-                                            </span>
-                                        </div>
-                                        {/* Suggestion #3: brief explanation to avoid ambiguity about what this measures */}
-                                        <p className="text-[9px] text-slate-400 font-medium mt-1.5 text-center leading-relaxed">
-                                            Based only on your eye contact, head stability, and voice delivery patterns - not on the correctness of your answers.
-                                        </p>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="md:col-span-8 space-y-6">
-                        {isOldFeedbackFormat && (
-                            <div className="bg-slate-100 border border-slate-200 rounded-2xl p-4 text-[11px] text-slate-600 font-semibold">
-                                ℹ️ Older report format: the points below were written by AI before confidence-only feedback was added, so they may also talk about your answers.
-                            </div>
-                        )}
-                        <div className="bg-white p-8 rounded-[2rem] border border-slate-100 shadow-sm">
-                            <div className="flex items-center gap-3 mb-1">
-                                <CheckCircle className="text-green-500" size={24} />
-                                <h3 className="text-sm font-black uppercase tracking-widest text-slate-800">{isTextMode ? 'Overall Strengths' : 'Confidence Strengths'}</h3>
-                            </div>
-                            {!isTextMode && (
-                                <p className="text-[11px] text-slate-400 font-medium mb-4 ml-9">Confidence factors that reached the strong level (80% or above).</p>
-                            )}
-                            {strengthItems.length > 0 ? (
-                                <div className="space-y-3">
-                                    {strengthItems.map((item, i) => <FeedbackItem key={i} item={item} kind="strength" />)}
-                                </div>
-                            ) : (
-                                <p className="text-sm text-slate-400 font-medium">{noFeedbackText}</p>
-                            )}
-                        </div>
-
-                        <div className="bg-white p-8 rounded-[2rem] border border-slate-100 shadow-sm">
-                            <div className="flex items-center gap-3 mb-1">
-                                <TrendingUp className="text-orange-500" size={24} />
-                                <h3 className="text-sm font-black uppercase tracking-widest text-slate-800">{isTextMode ? 'Key Areas for Improvement' : 'How to Build More Confidence'}</h3>
-                            </div>
-                            {!isTextMode && (
-                                <p className="text-[11px] text-slate-400 font-medium mb-4 ml-9">Weakest factor first. Each point shows what was measured and one thing to try next time.</p>
-                            )}
-                            {improvementItems.length > 0 ? (
-                                <div className="space-y-3">
-                                    {improvementItems.map((item, i) => <FeedbackItem key={i} item={item} kind="improvement" />)}
-                                </div>
-                            ) : (
-                                <p className="text-sm text-slate-400 font-medium">{noFeedbackText}</p>
-                            )}
-                        </div>
-
-                        {/* --- BSc Research Feature: Career Guidance Suggestions
-                            (Supporting Feature, NOT a core research contribution).
-                            Only shown when the content/textual score indicates a
-                            genuine knowledge gap - see career_resources.py for
-                            full scope disclosure. */}
-                        {recommendedResources && recommendedResources.triggered && (
-                            <div className="bg-indigo-50/60 p-8 rounded-[2rem] border border-indigo-100 shadow-sm">
-                                <div className="flex items-center gap-3 mb-3">
-                                    <GraduationCap className="text-indigo-500" size={24} />
-                                    <h3 className="text-sm font-black uppercase tracking-widest text-slate-800">Recommended Learning Resources</h3>
-                                </div>
-                                <p className="text-xs text-indigo-800/80 font-medium mb-4">{recommendedResources.reason}</p>
-                                <ul className="space-y-2">
-                                    {recommendedResources.resources.map((res, i) => (
-                                        <li key={i}>
-                                            <a
-                                                href={res.link}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="flex items-center justify-between bg-white p-3 rounded-xl border border-indigo-100 hover:border-indigo-300 transition-colors group"
-                                            >
-                                                <div>
-                                                    <p className="text-sm font-bold text-slate-700">{res.name}</p>
-                                                    <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest">{res.type}</p>
-                                                </div>
-                                                <ExternalLink size={14} className="text-slate-300 group-hover:text-indigo-500 transition-colors shrink-0" />
-                                            </a>
-                                        </li>
-                                    ))}
-                                </ul>
-
-                                {/* --- BSc Research Feature: Practice Quiz link -
-                                    only shown for QA Engineer, matching the
-                                    currently-authored quiz content (see
-                                    istqb_quiz.py). Extending to other roles
-                                    would require authoring role-specific
-                                    question sets first. */}
-                                {sessionRole === 'QA Engineer' && (
-                                    <button
-                                        onClick={() => navigate('/istqb-quiz')}
-                                        className="w-full mt-4 flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white py-3 rounded-xl font-black text-xs uppercase tracking-widest transition-all active:scale-95"
-                                    >
-                                        <ClipboardCheck size={16} /> Practice Quiz — Test Your Knowledge
-                                    </button>
-                                )}
-                            </div>
-                        )}
-                    </div>
-                </div>
-
-                <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm mt-8">
-                    <h3 className="text-xs font-black uppercase tracking-[0.2em] text-slate-800 mb-6 flex items-center gap-3">
-                        <span className="bg-slate-900 text-white w-6 h-6 rounded-full flex items-center justify-center text-[10px]">Q</span>
-                        Question Breakdown
-                    </h3>
-
-                    <div className="space-y-4">
-                        {evaluations && evaluations.length > 0 ? evaluations.map((item, index) => (
-                            <div key={index} className="border border-slate-100 rounded-2xl overflow-hidden shadow-sm transition-all">
-                                <button
-                                    onClick={() => setExpandedQ(expandedQ === index ? null : index)}
-                                    className="w-full bg-slate-50 p-5 flex items-center justify-between text-left hover:bg-slate-100 transition-colors"
-                                >
-                                    <div className="flex items-center gap-4">
-                                        {/* Suggestion #1 (Critical): distinct badge for skipped/not-evaluated
-                                            questions instead of a numeric score badge, and instead of the
-                                            question disappearing from the breakdown entirely. */}
-                                        {item.isSkipped ? (
-                                            <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-black text-[9px] uppercase bg-slate-400 text-center leading-tight">
-                                                Skip
-                                            </div>
-                                        ) : item.isNotEvaluated ? (
-                                            <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-black text-[8px] uppercase bg-slate-500 text-center leading-tight">
-                                                N/A
-                                            </div>
-                                        ) : (
-                                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white font-black text-xs ${item.score >= 80 ? 'bg-green-500' : item.score >= 60 ? 'bg-orange-500' : 'bg-red-500'}`}>
-                                                {item.score}
-                                            </div>
-                                        )}
-                                        <div>
-                                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">
-                                                Question {index + 1}
-                                                {item.isSkipped && <span className="text-slate-400 normal-case"> · Skipped</span>}
-                                                {item.isNotEvaluated && <span className="text-slate-400 normal-case"> · Not Evaluated</span>}
-                                            </p>
-                                            <p className="text-sm font-bold text-slate-700 line-clamp-1">{item.question}</p>
-                                        </div>
-                                    </div>
-                                    {expandedQ === index ? <ChevronUp className="text-slate-400" /> : <ChevronDown className="text-slate-400" />}
-                                </button>
-
-                                {expandedQ === index && (
-                                    <div className="p-6 bg-white border-t border-slate-100 space-y-6">
-                                        <div>
-                                            <p className="text-[10px] font-black uppercase tracking-widest text-blue-500 mb-2">Question</p>
-                                            <p className="text-sm font-medium text-slate-800 bg-slate-50 p-4 rounded-xl">{item.question}</p>
-                                        </div>
-                                        <div>
-                                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Your Answer</p>
-                                            <p className="text-sm font-medium text-slate-600 bg-slate-50 p-4 rounded-xl italic">
-                                                {item.isSkipped ? 'You skipped this question.' : item.answer}
-                                            </p>
-                                            {hasValue(item.speechRate) && (
-                                                <p className="text-[11px] font-semibold text-slate-500 mt-2">
-                                                    🎙️ Speaking speed: {item.speechRate} words per minute
-                                                    {hasValue(item.answerSeconds) ? ` (${Math.round(item.answerSeconds)} s answer)` : ''}
-                                                </p>
-                                            )}
-                                        </div>
-                                        <div className="bg-blue-50/50 p-4 rounded-xl border border-blue-100">
-                                            <p className="text-[10px] font-black uppercase tracking-widest text-blue-600 mb-2">{isTextMode ? 'AI Feedback' : 'Answer Feedback (content only - not part of the Confidence Score)'}</p>
-                                            <p className="text-sm font-bold text-slate-700">
-                                                {item.isSkipped
-                                                    ? 'This question was skipped and was not included in your score.'
-                                                    : item.isNotEvaluated
-                                                        ? 'This answer could not be evaluated (AI service limit reached) and was not included in your score.'
-                                                        : item.feedback}
-                                            </p>
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        )) : (
-                            <p className="text-slate-500 text-sm">No evaluation data available.</p>
-                        )}
-                    </div>
-                </div>
-
+                {results.replacedQuestions > 0 && (
+                    <Notice tone="slate" icon={RefreshCw}>
+                        {results.replacedQuestions} question{results.replacedQuestions > 1 ? 's were' : ' was'} replaced because
+                        your face was not detected for 30 seconds.
+                    </Notice>
+                )}
             </div>
+
+            {/* Scores */}
+            {isTextMode ? (
+                <Card className="mt-6 flex flex-col items-center gap-6 p-6 sm:flex-row">
+                    <ScoreRing value={overallScore} />
+                    <div>
+                        <p className="text-sm font-semibold text-slate-900">Answer score</p>
+                        <p className="mt-1 text-sm text-slate-500">Content of your answers, checked by AI.</p>
+                    </div>
+                </Card>
+            ) : (
+                <div className="mt-6 grid gap-5 lg:grid-cols-3">
+                    {/* Confidence score (main) */}
+                    <Card className="flex flex-col items-center p-6 text-center">
+                        <p className="text-sm font-semibold text-slate-900">Confidence score</p>
+                        <div className="mt-4">
+                            <ScoreRing value={overallScore} />
+                        </div>
+                        <p className="mt-4 text-xs text-slate-500">Average of visual and vocal confidence (both are needed).</p>
+                        {!hasValue(overallScore) && results.confidenceMissingReason && (
+                            <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">{results.confidenceMissingReason}</p>
+                        )}
+                        {hasValue(results.legacyOverallScore) && (
+                            <p className="mt-2 text-xs text-slate-500">
+                                Older interview: scored with the previous formula (60% answers + 20% camera + 20% voice) ={' '}
+                                {results.legacyOverallScore}. Not comparable with the Confidence Score.
+                            </p>
+                        )}
+
+                        {/* Answer score: secondary, NOT part of the Confidence Score */}
+                        <div className="mt-5 w-full border-t border-slate-100 pt-4 text-left">
+                            <div className="flex items-baseline justify-between text-sm">
+                                <span className="flex items-center gap-1.5 text-slate-700"><FileText size={14} className="text-slate-400" /> Answer score</span>
+                                <span className="font-semibold text-slate-700">
+                                    {hasValue(textualScore) ? Math.round(textualScore) : notEvaluatedCount > 0 ? 'Pending' : 'N/A'}
+                                </span>
+                            </div>
+                            <Bar value={textualScore} className="mt-1.5 h-1.5" />
+                            <p className="mt-1 text-xs text-slate-500">Content of your answers, checked by AI. Not part of the Confidence Score.</p>
+                        </div>
+                    </Card>
+
+                    <PartCard icon={Eye} title="Visual confidence" score={visualScore} missingText="No camera data recorded." factors={visualFactors}>
+                        {hasValue(visualBreakdown?.faceNotVisiblePct) && visualBreakdown.faceNotVisiblePct > 0 && (
+                            <p className="mt-3 flex items-start gap-1.5 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                                <AlertCircle size={14} className="mt-0.5 shrink-0" />
+                                Face not visible for {Math.round(visualBreakdown.faceNotVisiblePct)}% of the measured time (counted as 0).
+                            </p>
+                        )}
+                    </PartCard>
+
+                    <PartCard icon={Mic} title="Vocal confidence" score={vocalScore} missingText="No voice data recorded." factors={vocalFactors} />
+                </div>
+            )}
+
+            {/* Feedback */}
+            {isOldFeedbackFormat && (
+                <div className="mt-6">
+                    <Notice tone="slate">
+                        Older report format: the points below were written by AI before confidence-only feedback was added, so they
+                        may also talk about your answers.
+                    </Notice>
+                </div>
+            )}
+
+            <div className="mt-6 grid gap-5 lg:grid-cols-2">
+                <Card className="p-6">
+                    <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900">
+                        <TrendingUp size={18} className="text-amber-500" />
+                        {isTextMode ? 'Areas to improve' : 'How to build more confidence'}
+                    </h2>
+                    {!isTextMode && (
+                        <p className="mt-1 text-sm text-slate-500">Weakest factor first. Each point shows what was measured and one thing to try next time.</p>
+                    )}
+                    <div className="mt-4 space-y-3">
+                        {improvementItems.length > 0
+                            ? improvementItems.map((item, i) => <FeedbackItem key={i} item={item} kind="improvement" />)
+                            : <p className="text-sm text-slate-500">{noFeedbackText}</p>}
+                    </div>
+                </Card>
+
+                <Card className="p-6">
+                    <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900">
+                        <CheckCircle2 size={18} className="text-green-600" />
+                        {isTextMode ? 'Strengths' : 'Confidence strengths'}
+                    </h2>
+                    {!isTextMode && (
+                        <p className="mt-1 text-sm text-slate-500">Confidence factors that reached the strong level (80 or above).</p>
+                    )}
+                    <div className="mt-4 space-y-3">
+                        {strengthItems.length > 0
+                            ? strengthItems.map((item, i) => <FeedbackItem key={i} item={item} kind="strength" />)
+                            : <p className="text-sm text-slate-500">{noFeedbackText}</p>}
+                    </div>
+                </Card>
+            </div>
+
+            {/* Career guidance (supporting feature) - only when triggered */}
+            {recommendedResources && recommendedResources.triggered && (
+                <Card className="mt-6 p-6">
+                    <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900">
+                        <GraduationCap size={18} className="text-blue-600" />
+                        Recommended learning resources
+                    </h2>
+                    <p className="mt-1 text-sm text-slate-500">{recommendedResources.reason}</p>
+                    <ul className="mt-4 grid gap-2 sm:grid-cols-2">
+                        {recommendedResources.resources.map((res, i) => (
+                            <li key={i}>
+                                <a
+                                    href={res.link}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="group flex items-center justify-between gap-3 rounded-lg border border-slate-200 p-3 transition-colors hover:border-blue-300"
+                                >
+                                    <div>
+                                        <p className="text-sm font-medium text-slate-800">{res.name}</p>
+                                        <p className="text-xs text-slate-500">{res.type}</p>
+                                    </div>
+                                    <ExternalLink size={15} className="shrink-0 text-slate-300 group-hover:text-blue-600" />
+                                </a>
+                            </li>
+                        ))}
+                    </ul>
+                </Card>
+            )}
+
+            {/* Question breakdown */}
+            <Card className="mt-6">
+                <div className="border-b border-slate-100 px-6 py-4">
+                    <h2 className="text-base font-semibold text-slate-900">Question breakdown</h2>
+                    <p className="mt-0.5 text-sm text-slate-500">Your answer to each question, with AI feedback on the content.</p>
+                </div>
+                {evalList.length > 0 ? (
+                    <ul className="divide-y divide-slate-100">
+                        {evalList.map((item, index) => {
+                            const open = expandedQ === index;
+                            const badge = item.isSkipped
+                                ? { text: 'Skip', cls: 'bg-slate-100 text-slate-500' }
+                                : item.isNotEvaluated
+                                    ? { text: 'N/A', cls: 'bg-slate-100 text-slate-500' }
+                                    : { text: fmtNum(item.score), cls: scoreTone(item.score).soft };
+                            return (
+                                <li key={index}>
+                                    <button
+                                        type="button"
+                                        onClick={() => setExpandedQ(open ? null : index)}
+                                        aria-expanded={open}
+                                        className="flex w-full items-center gap-4 px-6 py-4 text-left transition-colors hover:bg-slate-50"
+                                    >
+                                        <span className={`grid h-10 w-10 shrink-0 place-items-center rounded-lg text-sm font-semibold ${badge.cls}`}>{badge.text}</span>
+                                        <div className="min-w-0 flex-1">
+                                            <p className="text-xs text-slate-500">
+                                                Question {index + 1}
+                                                {item.isSkipped && ' · Skipped'}
+                                                {item.isNotEvaluated && ' · Not evaluated'}
+                                            </p>
+                                            <p className={`text-sm font-medium text-slate-800 ${open ? '' : 'line-clamp-1'}`}>{item.question}</p>
+                                        </div>
+                                        <ChevronDown size={18} className={`shrink-0 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />
+                                    </button>
+
+                                    {open && (
+                                        <div className="space-y-4 px-6 pb-6 sm:pl-20">
+                                            <div>
+                                                <p className="text-xs font-medium text-slate-500">Your answer</p>
+                                                <p className="mt-1 rounded-lg bg-slate-50 px-4 py-3 text-sm leading-relaxed text-slate-700">
+                                                    {item.isSkipped ? 'You skipped this question.' : (item.answer || '—')}
+                                                </p>
+                                                {hasValue(item.speechRate) && (
+                                                    <p className="mt-2 flex items-center gap-1.5 text-xs text-slate-500">
+                                                        <Mic size={13} />
+                                                        Speaking speed: {item.speechRate} words per minute
+                                                        {hasValue(item.answerSeconds) ? ` (${Math.round(item.answerSeconds)} s answer)` : ''}
+                                                    </p>
+                                                )}
+                                            </div>
+                                            <div className="rounded-lg border border-blue-100 bg-blue-50/60 px-4 py-3">
+                                                <p className="text-xs font-medium text-blue-700">
+                                                    {isTextMode ? 'AI feedback' : 'Answer feedback (content only - not part of the Confidence Score)'}
+                                                </p>
+                                                <p className="mt-1 text-sm leading-relaxed text-slate-700">
+                                                    {item.isSkipped
+                                                        ? 'This question was skipped and was not included in your score.'
+                                                        : item.isNotEvaluated
+                                                            ? 'This answer could not be evaluated (AI service limit reached) and was not included in your score.'
+                                                            : item.feedback}
+                                                </p>
+                                            </div>
+                                        </div>
+                                    )}
+                                </li>
+                            );
+                        })}
+                    </ul>
+                ) : (
+                    <p className="px-6 py-5 text-sm text-slate-500">No evaluation data available.</p>
+                )}
+            </Card>
         </div>
     );
 };

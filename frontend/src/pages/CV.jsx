@@ -2,11 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
-import { APP_NAME } from '../config/Brand';
-
-
-
-
+import { Save, Download, Loader2, RefreshCw, Check, FolderGit2 } from 'lucide-react';
+import { PageHeader, Card, Alert, Field, btn, inputClass } from '../components/Ui';
 
 // Template 1: Modern Layout (Your Original Styling)
 const ModernTemplate = ({ cvData, selectedProjects }) => (
@@ -225,14 +222,26 @@ const ElegantTemplate = ({ cvData, selectedProjects }) => (
 
 
 
+// ---------------------------------------------------------------------------
 // 2. MAIN CV BUILDER COMPONENT
+// UI redesign (Oct 2026): the builder form, buttons and messages use the new
+// app style; messages are shown on the page instead of alert() popups. The
+// three CV templates above (what goes into the PDF) are unchanged.
+// ---------------------------------------------------------------------------
+
+const TEMPLATES = [
+    { key: 'modern', label: 'Modern', text: 'Dark header, two columns' },
+    { key: 'minimal', label: 'Minimal', text: 'Classic, single column' },
+    { key: 'elegant', label: 'Elegant', text: 'Side bar with skills' },
+];
+const MAX_PROJECTS = 4;
 
 const CVBuilder = () => {
     const cvPreviewRef = useRef(null);
 
     const [cvData, setCvData] = useState({
         fullName: "",
-        role: "Software Quality Assurance Intern",
+        role: "",
         email: "",
         phone: "",
         summary: "",
@@ -248,13 +257,15 @@ const CVBuilder = () => {
     const [loading, setLoading] = useState(false);
     const [saveLoading, setSaveLoading] = useState(false);
     const [isDownloading, setIsDownloading] = useState(false);
-    
-    // --- New State for handling active template ---
-    const [selectedTemplate, setSelectedTemplate] = useState("modern"); 
+    const [message, setMessage] = useState(null);       // { tone, text } for the page
+    const [githubError, setGithubError] = useState(''); // shown under the GitHub box
+
+    // --- Active template ---
+    const [selectedTemplate, setSelectedTemplate] = useState("modern");
 
     useEffect(() => {
         const fetchSavedData = async () => {
-            const userId = localStorage.getItem('userId'); 
+            const userId = localStorage.getItem('userId');
             if (userId) {
                 try {
                     const response = await axios.get(`http://localhost:8000/get-cv/${userId}`);
@@ -271,7 +282,7 @@ const CVBuilder = () => {
                             certifications: d.certifications || "",
                             publications: d.publications || ""
                         });
-                        if(d.github_username) setGithubUser(d.github_username);
+                        if (d.github_username) setGithubUser(d.github_username);
                     }
                 } catch (err) {
                     console.error("Error fetching saved CV:", err);
@@ -287,9 +298,13 @@ const CVBuilder = () => {
 
     const handleSave = async () => {
         const userId = localStorage.getItem('userId');
-        if (!userId) return alert("Please login first!");
+        if (!userId) {
+            setMessage({ tone: 'error', text: 'Please log in first.' });
+            return;
+        }
 
         setSaveLoading(true);
+        setMessage(null);
         const payload = {
             user_id: parseInt(userId),
             full_name: cvData.fullName,
@@ -306,10 +321,10 @@ const CVBuilder = () => {
 
         try {
             const response = await axios.post("http://localhost:8000/save-cv", payload);
-            alert(response.data.message || "Data saved successfully!");
+            setMessage({ tone: 'success', text: response.data.message || "Your CV details were saved." });
         } catch (err) {
             console.error("Save failed:", err);
-            alert("Failed to save data.");
+            setMessage({ tone: 'error', text: "Could not save your CV details. Please try again." });
         } finally {
             setSaveLoading(false);
         }
@@ -320,39 +335,45 @@ const CVBuilder = () => {
         if (!element) return;
 
         setIsDownloading(true);
+        setMessage(null);
         try {
             const canvas = await html2canvas(element, {
-                scale: 3, 
+                scale: 3,
                 useCORS: true,
                 logging: false,
                 backgroundColor: "#ffffff",
             });
 
             const imgData = canvas.toDataURL('image/png');
-            const imgWidth = 210; 
+            const imgWidth = 210;
             const imgHeight = (canvas.height * imgWidth) / canvas.width;
-            
+
             const pdf = new jsPDF('p', 'mm', [imgWidth, imgHeight]);
             pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, imgHeight);
             pdf.save(`${cvData.fullName || 'CV'}_${selectedTemplate.toUpperCase()}.pdf`);
         } catch (error) {
             console.error("Download Error:", error);
-            alert("Could not generate PDF.");
+            setMessage({ tone: 'error', text: "Could not create the PDF. Please try again." });
         } finally {
             setIsDownloading(false);
         }
     };
 
     const fetchRepos = async () => {
-        if (!githubUser) return alert("Please enter GitHub username");
+        setGithubError('');
+        if (!githubUser.trim()) {
+            setGithubError("Please enter a GitHub username.");
+            return;
+        }
         setLoading(true);
         try {
-            const response = await axios.get(`https://api.github.com/users/${githubUser}/repos?sort=updated`);
+            const response = await axios.get(`https://api.github.com/users/${githubUser.trim()}/repos?sort=updated`);
             setGithubRepos(response.data);
-        } catch (err) { 
-            alert("GitHub User not found!"); 
-        } finally { 
-            setLoading(false); 
+            if (!response.data.length) setGithubError("This GitHub user has no public repositories.");
+        } catch {
+            setGithubError("GitHub user not found, or GitHub could not be reached.");
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -360,8 +381,12 @@ const CVBuilder = () => {
         const isSelected = selectedProjects.find(p => p.id === repo.id);
         if (isSelected) {
             setSelectedProjects(selectedProjects.filter(p => p.id !== repo.id));
+            setGithubError('');
         } else {
-            if (selectedProjects.length >= 4) return alert("Maximum 4 projects allowed.");
+            if (selectedProjects.length >= MAX_PROJECTS) {
+                setGithubError(`You can add up to ${MAX_PROJECTS} projects. Remove one first.`);
+                return;
+            }
             setSelectedProjects([...selectedProjects, {
                 id: repo.id,
                 name: repo.name,
@@ -371,128 +396,142 @@ const CVBuilder = () => {
         }
     };
 
+    const input = (name, placeholder, extra = {}) => (
+        <input id={`cv-${name}`} name={name} value={cvData[name]} placeholder={placeholder} onChange={handleChange} className={inputClass} {...extra} />
+    );
+
     return (
-        <div className="max-w-7xl mx-auto p-6 animate-in fade-in duration-700 text-left">
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
-                
-                {/* --- Left Side: Configuration Fields --- */}
-                <div className="lg:col-span-5 space-y-12 pb-20">
-                    <div className="flex justify-between items-center">
-                        <div>
-                            <h2 className="text-2xl font-black text-slate-800 tracking-tighter uppercase">CV BUILDER</h2>
-                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Real-time profile sync</p>
-                        </div>
-                        <button 
-                            onClick={handleSave}
-                            disabled={saveLoading}
-                            className="bg-blue-600 text-white px-5 py-2 rounded-xl text-[10px] font-black uppercase hover:bg-slate-900 transition-all shadow-lg disabled:bg-slate-400"
-                        >
-                            {saveLoading ? "Saving..." : "Save to Profile"}
+        <div>
+            <PageHeader
+                title="CV builder"
+                description="Fill in your details, add projects from GitHub, pick a layout and download your CV as a PDF."
+                actions={
+                    <>
+                        <button type="button" onClick={handleSave} disabled={saveLoading} className={btn.secondary}>
+                            {saveLoading ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                            {saveLoading ? "Saving..." : "Save"}
                         </button>
-                    </div>
+                        <button type="button" onClick={handleDownload} disabled={isDownloading} className={btn.primary}>
+                            {isDownloading ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+                            {isDownloading ? "Creating PDF..." : "Download PDF"}
+                        </button>
+                    </>
+                }
+            />
 
-                    {/* --- NEW: Template Selection Section --- */}
-                    <div className="space-y-4 bg-slate-50 p-5 rounded-2xl border border-slate-100">
-                        <h4 className="text-[10px] font-black text-slate-700 uppercase tracking-[0.2em] flex items-center gap-3">
-                            <span className="w-8 h-[1px] bg-slate-700"></span> Choose Layout Design
-                        </h4>
-                        <div className="grid grid-cols-3 gap-2">
-                            {['modern', 'minimal', 'elegant'].map((temp) => (
-                                <button
-                                    key={temp}
-                                    onClick={() => setSelectedTemplate(temp)}
-                                    className={`py-2.5 px-2 rounded-xl text-[10px] font-black uppercase transition-all tracking-wider ${
-                                        selectedTemplate === temp 
-                                        ? 'bg-blue-600 text-white shadow-md' 
-                                        : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-                                    }`}
-                                >
-                                    {temp}
-                                </button>
-                            ))}
+            {message && <Alert tone={message.tone} className="mt-5" onClose={() => setMessage(null)}>{message.text}</Alert>}
+
+            <div className="mt-6 grid gap-6 xl:grid-cols-12">
+                {/* --- Left: form --- */}
+                <div className="min-w-0 space-y-5 xl:col-span-5">
+                    <Card className="p-5">
+                        <h2 className="text-sm font-semibold text-slate-900">Layout</h2>
+                        <div className="mt-3 grid grid-cols-3 gap-2" role="radiogroup" aria-label="CV layout">
+                            {TEMPLATES.map((t) => {
+                                const active = selectedTemplate === t.key;
+                                return (
+                                    <button
+                                        key={t.key}
+                                        type="button"
+                                        role="radio"
+                                        aria-checked={active}
+                                        onClick={() => setSelectedTemplate(t.key)}
+                                        className={`rounded-lg border px-3 py-2.5 text-left transition-colors ${active ? 'border-blue-600 bg-blue-50' : 'border-slate-200 hover:bg-slate-50'}`}
+                                    >
+                                        <span className={`block text-sm font-medium ${active ? 'text-blue-700' : 'text-slate-800'}`}>{t.label}</span>
+                                        <span className="mt-0.5 block text-xs text-slate-500">{t.text}</span>
+                                    </button>
+                                );
+                            })}
                         </div>
-                    </div>
+                    </Card>
 
-                    <div className="space-y-6">
-                        <h4 className="text-[10px] font-black text-blue-600 uppercase tracking-[0.2em] flex items-center gap-3">
-                            <span className="w-8 h-[1px] bg-blue-600"></span> Personal Information
-                        </h4>
-                        <div className="grid grid-cols-1 gap-5">
-                            <input name="fullName" value={cvData.fullName} placeholder="Full Name" onChange={handleChange} className="w-full bg-transparent border-b-2 border-slate-100 py-3 focus:border-blue-500 outline-none text-sm font-bold" />
-                            <input name="role" value={cvData.role} placeholder="Professional Role" onChange={handleChange} className="w-full bg-transparent border-b-2 border-slate-100 py-3 focus:border-blue-500 outline-none text-sm font-bold" />
-                            <div className="grid grid-cols-2 gap-5">
-                                <input name="email" value={cvData.email} placeholder="Email" onChange={handleChange} className="w-full bg-transparent border-b-2 border-slate-100 py-3 focus:border-blue-500 outline-none text-xs" />
-                                <input name="phone" value={cvData.phone} placeholder="Phone" onChange={handleChange} className="w-full bg-transparent border-b-2 border-slate-100 py-3 focus:border-blue-500 outline-none text-xs" />
-                            </div>
+                    <Card className="space-y-4 p-5">
+                        <h2 className="text-sm font-semibold text-slate-900">Personal information</h2>
+                        <Field id="cv-fullName" label="Full name">{input('fullName', 'e.g. Kasun Perera', { autoComplete: 'name' })}</Field>
+                        <Field id="cv-role" label="Professional title">{input('role', 'e.g. Software Engineering Intern')}</Field>
+                        <div className="grid gap-4 sm:grid-cols-2">
+                            <Field id="cv-email" label="Email">{input('email', 'you@example.com', { type: 'email', autoComplete: 'email' })}</Field>
+                            <Field id="cv-phone" label="Phone">{input('phone', '+94 7x xxx xxxx', { type: 'tel', autoComplete: 'tel' })}</Field>
                         </div>
-                    </div>
+                    </Card>
 
-                    <div className="space-y-4">
-                        <h4 className="text-[10px] font-black text-blue-600 uppercase tracking-[0.2em] flex items-center gap-3">
-                            <span className="w-8 h-[1px] bg-blue-600"></span> Summary
-                        </h4>
-                        <textarea name="summary" value={cvData.summary} placeholder="A short description about yourself..." onChange={handleChange} className="w-full bg-slate-50 p-5 rounded-2xl border-none text-xs leading-relaxed outline-none focus:ring-2 focus:ring-blue-100 min-h-[100px]" />
-                    </div>
+                    <Card className="space-y-4 p-5">
+                        <h2 className="text-sm font-semibold text-slate-900">Summary and qualifications</h2>
+                        <Field id="cv-summary" label="Summary">
+                            <textarea id="cv-summary" name="summary" value={cvData.summary} placeholder="A short description of your skills and goals..." onChange={handleChange} rows={4} className={`${inputClass} resize-y`} />
+                        </Field>
+                        <Field id="cv-education" label="Education">{input('education', 'e.g. BSc (Hons) IT, KDU (2023 - 2027)')}</Field>
+                        <Field id="cv-skills" label="Skills" hint="Separate skills with commas.">
+                            <textarea id="cv-skills" name="skills" value={cvData.skills} placeholder="React, Python, SQL, Git" onChange={handleChange} rows={2} className={`${inputClass} resize-y`} />
+                        </Field>
+                        <Field id="cv-certifications" label="Certifications">{input('certifications', 'Optional')}</Field>
+                        <Field id="cv-publications" label="Publications">{input('publications', 'Optional')}</Field>
+                    </Card>
 
-                    <div className="space-y-6">
-                        <h4 className="text-[10px] font-black text-blue-600 uppercase tracking-[0.2em] flex items-center gap-3">
-                            <span className="w-8 h-[1px] bg-blue-600"></span> Qualifications
-                        </h4>
-                        <input name="education" value={cvData.education} placeholder="Education" onChange={handleChange} className="w-full bg-transparent border-b-2 border-slate-100 py-3 focus:border-blue-500 outline-none text-xs font-bold" />
-                        <textarea name="skills" value={cvData.skills} placeholder="Skills (comma separated)" onChange={handleChange} className="w-full bg-transparent border-b-2 border-slate-100 py-3 focus:border-blue-500 outline-none text-xs" />
-                        <input name="certifications" value={cvData.certifications} placeholder="Certifications" onChange={handleChange} className="w-full bg-transparent border-b-2 border-slate-100 py-3 focus:border-blue-500 outline-none text-xs" />
-                        <input name="publications" value={cvData.publications} placeholder="Publications" onChange={handleChange} className="w-full bg-transparent border-b-2 border-slate-100 py-3 focus:border-blue-500 outline-none text-xs" />
-                    </div>
-
-                    <div className="space-y-6 pt-4">
-                        <h4 className="text-[10px] font-black text-slate-800 uppercase tracking-[0.2em] flex items-center gap-3">
-                            <span className="w-8 h-[1px] bg-slate-800"></span> GitHub Integration
-                        </h4>
-                        <div className="flex gap-3">
-                            <input placeholder="Username" value={githubUser} onChange={(e)=>setGithubUser(e.target.value)} className="flex-1 bg-slate-100 px-5 py-3 rounded-xl text-xs font-bold outline-none" />
-                            <button onClick={fetchRepos} className="bg-slate-900 text-white px-6 py-3 rounded-xl text-[10px] font-black uppercase hover:bg-blue-600 transition-all">
-                                {loading ? "..." : "Sync"}
+                    <Card className="p-5">
+                        <div className="flex items-center justify-between gap-3">
+                            <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900"><FolderGit2 size={16} /> Projects from GitHub</h2>
+                            <span className="text-xs text-slate-500">{selectedProjects.length} / {MAX_PROJECTS} selected</span>
+                        </div>
+                        <form
+                            className="mt-3 flex gap-2"
+                            onSubmit={(e) => { e.preventDefault(); fetchRepos(); }}
+                        >
+                            <label htmlFor="cv-github" className="sr-only">GitHub username</label>
+                            <input id="cv-github" placeholder="GitHub username" value={githubUser} onChange={(e) => setGithubUser(e.target.value)} className={inputClass} />
+                            <button type="submit" disabled={loading} className={`${btn.secondary} shrink-0`}>
+                                {loading ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+                                Load
                             </button>
-                        </div>
-                        <div className="grid grid-cols-1 gap-2 max-h-[200px] overflow-y-auto custom-scrollbar">
-                            {githubRepos.map(repo => (
-                                <div key={repo.id} onClick={() => toggleProject(repo)} className={`p-3 rounded-xl border-2 cursor-pointer text-[10px] font-bold flex justify-between items-center transition-all ${selectedProjects.find(p => p.id === repo.id) ? 'border-blue-500 bg-blue-50' : 'border-slate-50 bg-white hover:border-slate-200'}`}>
-                                    <span className="truncate w-40 uppercase">{repo.name}</span>
-                                    {selectedProjects.find(p => p.id === repo.id) ? <span className="text-blue-600">SELECTED</span> : <span className="text-slate-300">+</span>}
-                                </div>
-                            ))}
-                        </div>
-                    </div>
+                        </form>
+                        {githubError && <p className="mt-2 text-xs text-red-600">{githubError}</p>}
+                        {githubRepos.length > 0 && (
+                            <ul className="mt-3 max-h-60 space-y-1.5 overflow-y-auto pr-1">
+                                {githubRepos.map(repo => {
+                                    const selected = !!selectedProjects.find(p => p.id === repo.id);
+                                    return (
+                                        <li key={repo.id}>
+                                            <button
+                                                type="button"
+                                                onClick={() => toggleProject(repo)}
+                                                aria-pressed={selected}
+                                                className={`flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left text-sm transition-colors ${selected ? 'border-blue-600 bg-blue-50' : 'border-slate-200 hover:bg-slate-50'}`}
+                                            >
+                                                <span className={`grid h-4 w-4 shrink-0 place-items-center rounded border ${selected ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300'}`}>
+                                                    {selected && <Check size={12} strokeWidth={3} />}
+                                                </span>
+                                                <span className="min-w-0 flex-1 truncate text-slate-800">{repo.name}</span>
+                                                {repo.language && <span className="shrink-0 text-xs text-slate-500">{repo.language}</span>}
+                                            </button>
+                                        </li>
+                                    );
+                                })}
+                            </ul>
+                        )}
+                    </Card>
                 </div>
 
-                {/* --- Right Side: CV Preview Wrapper --- */}
-                <div className="lg:col-span-7">
-                    <div 
-                        ref={cvPreviewRef} 
-                        className="bg-white rounded-[2rem] shadow-2xl border border-slate-100 flex flex-col mx-auto overflow-hidden"
-                        style={{ width: '100%', maxWidth: '800px' }}
-                    >
-                        {/* --- CONDITIONAL RENDERING BASED ON CHOSEN TEMPLATE --- */}
-                        {selectedTemplate === 'modern' && (
-                            <ModernTemplate cvData={cvData} selectedProjects={selectedProjects} />
-                        )}
-                        {selectedTemplate === 'minimal' && (
-                            <MinimalTemplate cvData={cvData} selectedProjects={selectedProjects} />
-                        )}
-                        {selectedTemplate === 'elegant' && (
-                            <ElegantTemplate cvData={cvData} selectedProjects={selectedProjects} />
-                        )}
-
-                        {/* PDF Footer Component (Hidden from actual PDF, only visible in browser preview) */}
-                        <div className="p-8 bg-slate-50 flex justify-between items-center border-t border-slate-100" data-html2canvas-ignore="true">
-                            <span className="text-[7px] font-black text-slate-300 uppercase tracking-[0.4em]">Generated by {APP_NAME}</span>
-                            <button 
-                                onClick={handleDownload}
-                                disabled={isDownloading}
-                                className="bg-blue-600 text-white px-8 py-3 rounded-xl font-black text-[9px] uppercase hover:bg-slate-900 transition-all disabled:bg-slate-400"
+                {/* --- Right: live preview (this box is what goes into the PDF) --- */}
+                <div className="min-w-0 xl:col-span-7">
+                    <div className="xl:sticky xl:top-6">
+                        <p className="mb-2 text-sm font-medium text-slate-500">Preview</p>
+                        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-slate-100 p-3 sm:p-4">
+                            <div
+                                ref={cvPreviewRef}
+                                className="mx-auto flex flex-col overflow-hidden bg-white shadow-sm"
+                                style={{ width: '100%', minWidth: '560px', maxWidth: '800px' }}
                             >
-                                {isDownloading ? "Generating PDF..." : "Download PDF"}
-                            </button>
+                                {selectedTemplate === 'modern' && (
+                                    <ModernTemplate cvData={cvData} selectedProjects={selectedProjects} />
+                                )}
+                                {selectedTemplate === 'minimal' && (
+                                    <MinimalTemplate cvData={cvData} selectedProjects={selectedProjects} />
+                                )}
+                                {selectedTemplate === 'elegant' && (
+                                    <ElegantTemplate cvData={cvData} selectedProjects={selectedProjects} />
+                                )}
+                            </div>
                         </div>
                     </div>
                 </div>

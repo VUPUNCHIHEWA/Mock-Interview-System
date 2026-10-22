@@ -328,6 +328,7 @@ def evaluate(system_path, manual_path, out_path):
         score_err = sum(abs(speech_rate_score(p["sys"]) - speech_rate_score(p["man"]))
                         for p in pairs) / len(pairs)
         slow = sum(1 for p in pairs if p["man"] < 113)
+        zero = sum(1 for p in pairs if speech_rate_score(p["man"]) == 0)
         lines += ["| Measure | Value |", "|---|---|",
                   f"| Recordings compared | {len(pairs)} |",
                   f"| **Mean absolute WPM error** | **{mean_pct:.1f} %** ({mae:.1f} WPM) |",
@@ -336,7 +337,8 @@ def evaluate(system_path, manual_path, out_path):
                   f"| Mean speaking-time error | {time_mae:.2f} s |",
                   f"| Pearson r (app vs you) | {_f(r)} |",
                   f"| Mean score difference this causes | {score_err:.1f} points |",
-                  f"| Answers slower than 113 WPM (floor, L44) | {slow} of {len(pairs)} ({100 * slow / len(pairs):.0f} %) |", ""]
+                  f"| Answers slower than 113 WPM (below the slowest tested speed, L44) | {slow} of {len(pairs)} ({100 * slow / len(pairs):.0f} %) |",
+                  f"| Answers scoring 0 (< 74 or > 300 WPM, floor, L46) | {zero} of {len(pairs)} ({100 * zero / len(pairs):.0f} %) |", ""]
         if len(pairs) < MIN_CLIPS:
             verdict = f"NOT ENOUGH DATA - {len(pairs)} recordings (need {MIN_CLIPS}+)."
         elif mean_pct <= ACCEPT_WPM_PCT_ERROR:
@@ -439,6 +441,19 @@ def evaluate(system_path, manual_path, out_path):
         lines += ["No recordings have praat_mean_hz and praat_sd_hz yet.", ""]
     lines += _confidence_check("Pitch Variation", "pitch_score", system, manual)
 
+    # where the recordings fall on the two PVQ points (B4, L48)
+    pvqs = [_num(s.get("pitch_pvq")) for s in system.values()]
+    pvqs = [v for v in pvqs if v is not None]
+    if pvqs:
+        zones = [("below 0.06 (score 0, too little)", lambda v: v <= 0.06),
+                 ("0.06 - 0.15 (too little, rising)", lambda v: 0.06 < v < 0.15),
+                 ("0.15 or more (score 100)", lambda v: v >= 0.15)]
+        lines += ["### Where the recordings fall (B4)", "", "| PVQ zone | Recordings |", "|---|---|"]
+        for name, test in zones:
+            n = sum(1 for v in pvqs if test(v))
+            lines.append(f"| {name} | {n} of {len(pvqs)} ({100 * n / len(pvqs):.0f} %) |")
+        lines.append("")
+
     # male / female difference (Hincks 2005 found higher PVQ for men, L12)
     by_g = {}
     for clip, m in manual.items():
@@ -453,7 +468,7 @@ def evaluate(system_path, manual_path, out_path):
             vals = by_g[g]
             lines.append(f"| {g} | {len(vals)} | {sum(v for v, _ in vals) / len(vals):.3f} | "
                          f"{sum(x for _, x in vals if x is not None) / len(vals):.1f} |")
-        lines += ["", "A large gap between M and F means the 0.06 / 0.15 anchors may favour one group; report it.", ""]
+        lines += ["", "A large gap between M and F means the 0.06 / 0.15 points may favour one group; report it.", ""]
 
     report = "\n".join(lines) + "\n"
     Path(out_path).write_text(report, encoding="utf-8")

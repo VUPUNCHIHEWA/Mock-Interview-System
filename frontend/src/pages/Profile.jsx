@@ -1,17 +1,38 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { notifyProfileUpdated } from '../utils/Currentuser';
-import { User, Mail, GraduationCap, Link2, Save, Loader2, CheckCircle2 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { notifyProfileUpdated } from '../utils/currentUser';
+import { Save, Loader2 } from 'lucide-react';
+import { PageHeader, Card, Alert, PageLoader, Field, btn, inputClass } from '../components/ui';
 
-// --- BSc Research Feature: role options here MUST match the backend's
-// AVAILABLE_ROLES exactly (see question_bank.py) - previously this
-// dropdown offered role strings ("Fullstack Developer", "Data Science
-// Intern") that don't exist in the app's actual 4 supported roles,
-// meaning a saved profile role could never correctly match an
-// Interview Setup selection. Fixed to the exact 4 supported roles.
-const AVAILABLE_ROLES = ["Software Engineer", "QA Engineer", "Business Analyst", "UX/UI Designer"];
+const API = "http://localhost:8000";
+
+// ---------------------------------------------------------------------------
+// Profile (UI redesign, Oct 2026).
+// Same data and save call as before. The "Target role" field is no longer
+// shown: interviews have no job role any more (ASSUMPTIONS D1, I24). Any role
+// already saved is kept unchanged because the whole profile object is sent
+// back on save.
+// ---------------------------------------------------------------------------
+
+const getInitials = (name) => {
+    if (!name || !name.trim()) return "?";
+    return name.trim().split(/\s+/).map(w => w[0]).join("").toUpperCase().slice(0, 2);
+};
+
+// One settings section: title + description on the left, fields on the right
+const Section = ({ title, description, children }) => (
+    <div className="grid gap-4 px-5 py-6 sm:px-6 md:grid-cols-3 md:gap-8">
+        <div>
+            <h2 className="text-sm font-semibold text-slate-900">{title}</h2>
+            {description && <p className="mt-1 text-sm text-slate-500">{description}</p>}
+        </div>
+        <div className="space-y-4 md:col-span-2">{children}</div>
+    </div>
+);
 
 const Profile = () => {
+    const navigate = useNavigate();
     const [profile, setProfile] = useState({
         full_name: "",
         email: "",
@@ -24,209 +45,125 @@ const Profile = () => {
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [saveSuccess, setSaveSuccess] = useState(false);
+    const [error, setError] = useState('');
+    const [dirty, setDirty] = useState(false);
 
-    const userId = localStorage.getItem("userId") || 1;
+    const userId = localStorage.getItem("userId");
 
     useEffect(() => {
-        axios.get(`http://localhost:8000/profile/${userId}`)
-            .then(response => {
-                setProfile(prev => ({ ...prev, ...response.data }));
-                setLoading(false);
-            })
+        if (!userId) {
+            navigate('/login', { replace: true });
+            return;
+        }
+        axios.get(`${API}/profile/${userId}`)
+            .then(response => setProfile(prev => ({ ...prev, ...response.data })))
             .catch(err => {
                 console.error("Failed to load profile:", err);
-                setLoading(false);
-            });
-    }, [userId]);
+                setError("Could not load your profile. Please check that the backend is running.");
+            })
+            .finally(() => setLoading(false));
+    }, [userId, navigate]);
 
     const handleChange = (field, value) => {
         setProfile(prev => ({ ...prev, [field]: value }));
         setSaveSuccess(false);
+        setDirty(true);
     };
 
-    const handleSave = async () => {
+    const handleSave = async (e) => {
+        e?.preventDefault();
         setSaving(true);
         setSaveSuccess(false);
+        setError('');
         try {
-            await axios.put(`http://localhost:8000/profile/${userId}`, profile);
+            await axios.put(`${API}/profile/${userId}`, profile);
             setSaveSuccess(true);
+            setDirty(false);
             // Update the name shown in the sidebar and dashboard (I20)
             notifyProfileUpdated();
         } catch (err) {
             console.error("Failed to save profile:", err);
-            alert("Could not save profile changes.");
+            setError("Could not save your changes. Please try again.");
         } finally {
             setSaving(false);
         }
     };
 
-    // --- BSc Research Feature (Bug fix): avatar initials are now
-    // generated dynamically from the user's actual full_name, instead
-    // of a hardcoded "VU" placeholder that showed for every user
-    // regardless of their real name.
-    const getInitials = (name) => {
-        if (!name || !name.trim()) return "?";
-        return name.trim().split(/\s+/).map(w => w[0]).join("").toUpperCase().slice(0, 2);
-    };
+    if (loading) return <PageLoader />;
 
-    if (loading) {
-        return (
-            <div className="flex items-center justify-center min-h-[60vh]">
-                <Loader2 className="animate-spin text-blue-500" size={48} />
-            </div>
-        );
-    }
+    const field = (key) => ({
+        id: `profile-${key}`,
+        value: profile[key] || "",
+        onChange: (e) => handleChange(key, e.target.value),
+        className: inputClass,
+    });
 
     return (
-        <div className="p-6 md:p-10 animate-in fade-in duration-500 max-w-3xl mx-auto space-y-8">
+        <form onSubmit={handleSave} noValidate>
+            <PageHeader
+                title="Profile"
+                description="Your personal and academic details."
+                actions={
+                    <button type="submit" disabled={saving || !dirty} className={btn.primary}>
+                        {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                        {saving ? "Saving..." : "Save changes"}
+                    </button>
+                }
+            />
 
-            <h1 className="text-3xl font-black text-slate-900 tracking-tighter uppercase italic flex items-center gap-3">
-                <User className="text-blue-500" size={32} />
-                Profile
-            </h1>
+            {error && <Alert tone="error" className="mt-5" onClose={() => setError('')}>{error}</Alert>}
+            {saveSuccess && <Alert tone="success" className="mt-5" onClose={() => setSaveSuccess(false)}>Your profile was saved.</Alert>}
 
-            {/* Avatar + Name Header */}
-            <div className="bg-white border border-slate-100 rounded-[2rem] p-8 shadow-sm flex items-center gap-6">
-                <div className="w-20 h-20 bg-blue-600 rounded-2xl flex items-center justify-center text-white text-2xl font-black shadow-lg shadow-blue-200 shrink-0">
+            {/* Summary */}
+            <Card className="mt-6 flex items-center gap-4 p-5 sm:p-6">
+                <span className="grid h-14 w-14 shrink-0 place-items-center rounded-full bg-blue-100 text-lg font-semibold text-blue-700">
                     {getInitials(profile.full_name)}
+                </span>
+                <div className="min-w-0">
+                    <p className="truncate text-base font-semibold text-slate-900">{profile.full_name || "Add your name"}</p>
+                    <p className="truncate text-sm text-slate-500">{profile.email || "No email added"}</p>
+                    {(profile.degree || profile.university) && (
+                        <p className="mt-0.5 truncate text-xs text-slate-500">{[profile.degree, profile.university].filter(Boolean).join(' · ')}</p>
+                    )}
                 </div>
-                <div>
-                    <h2 className="text-xl font-bold text-slate-800">{profile.full_name || "Unnamed User"}</h2>
-                    <p className="text-sm text-slate-400 font-medium">{profile.email || "No email set"}</p>
-                </div>
-            </div>
+            </Card>
 
-            {/* Personal Details */}
-            <div className="bg-white border border-slate-100 rounded-[2rem] p-8 shadow-sm space-y-5">
-                <h3 className="text-xs font-black uppercase tracking-widest text-slate-400 mb-2">Personal Details</h3>
+            <Card className="mt-5 divide-y divide-slate-100">
+                <Section title="Personal details" description="Your name is shown in the sidebar and on the dashboard.">
+                    <Field id="profile-full_name" label="Full name">
+                        <input type="text" placeholder="Enter your full name" autoComplete="name" {...field('full_name')} />
+                    </Field>
+                    <Field id="profile-email" label="Contact email" hint="Shown on your profile. Your log in email does not change.">
+                        <input type="email" placeholder="you@example.com" autoComplete="email" {...field('email')} />
+                    </Field>
+                </Section>
 
-                <div>
-                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Full Name</label>
-                    <input
-                        type="text"
-                        value={profile.full_name}
-                        onChange={(e) => handleChange('full_name', e.target.value)}
-                        placeholder="Enter your full name"
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 outline-none focus:border-blue-500"
-                    />
-                </div>
+                <Section title="Academic details" description="Your university and degree programme.">
+                    <Field id="profile-university" label="University">
+                        <input type="text" placeholder="Enter your university" {...field('university')} />
+                    </Field>
+                    <Field id="profile-degree" label="Degree programme">
+                        <input type="text" placeholder="e.g. BSc (Hons) Information Technology" {...field('degree')} />
+                    </Field>
+                </Section>
 
-                <div>
-                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block flex items-center gap-1.5">
-                        <Mail size={12} /> Email
-                    </label>
-                    <input
-                        type="email"
-                        value={profile.email}
-                        onChange={(e) => handleChange('email', e.target.value)}
-                        placeholder="you@example.com"
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 outline-none focus:border-blue-500"
-                    />
-                </div>
-            </div>
+                <Section title="Professional links" description="Links to your GitHub and LinkedIn profiles.">
+                    <Field id="profile-github" label="GitHub username">
+                        <input type="text" placeholder="your-github-username" {...field('github')} />
+                    </Field>
+                    <Field id="profile-linkedin" label="LinkedIn profile URL">
+                        <input type="url" placeholder="https://linkedin.com/in/your-profile" {...field('linkedin')} />
+                    </Field>
+                </Section>
+            </Card>
 
-            {/* Academic Details */}
-            <div className="bg-white border border-slate-100 rounded-[2rem] p-8 shadow-sm space-y-5">
-                <h3 className="text-xs font-black uppercase tracking-widest text-slate-400 mb-2 flex items-center gap-2">
-                    <GraduationCap size={14} /> Academic Details
-                </h3>
-
-                {/* --- BSc Research Feature (Bug fix): university is now an
-                    editable field showing the user's ACTUAL saved value,
-                    instead of a hardcoded "KDU Sri Lanka" string shown for
-                    every user regardless of their real university. The
-                    previous fake "verified/synced" message (implying an
-                    academic-records verification process that doesn't
-                    exist) has also been removed. */}
-                <div>
-                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">University</label>
-                    <input
-                        type="text"
-                        value={profile.university}
-                        onChange={(e) => handleChange('university', e.target.value)}
-                        placeholder="Enter your university"
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 outline-none focus:border-blue-500"
-                    />
-                </div>
-
-                <div>
-                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Degree Programme</label>
-                    <input
-                        type="text"
-                        value={profile.degree}
-                        onChange={(e) => handleChange('degree', e.target.value)}
-                        placeholder="e.g. BSc (Hons) Information Technology"
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 outline-none focus:border-blue-500"
-                    />
-                </div>
-
-                {/* --- BSc Research Feature (Bug fix): options now exactly
-                    match the backend's AVAILABLE_ROLES (question_bank.py),
-                    so a saved profile role is guaranteed to correctly match
-                    the roles offered in Interview Setup. */}
-                <div>
-                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Target Role</label>
-                    <select
-                        value={profile.role}
-                        onChange={(e) => handleChange('role', e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 outline-none focus:border-blue-500"
-                    >
-                        <option value="">Select a role</option>
-                        {AVAILABLE_ROLES.map(role => (
-                            <option key={role} value={role}>{role}</option>
-                        ))}
-                    </select>
-                </div>
-            </div>
-
-            {/* Links */}
-            <div className="bg-white border border-slate-100 rounded-[2rem] p-8 shadow-sm space-y-5">
-                <h3 className="text-xs font-black uppercase tracking-widest text-slate-400 mb-2">Professional Links</h3>
-
-                <div>
-                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block flex items-center gap-1.5">
-                        <Link2 size={12} /> GitHub Username
-                    </label>
-                    <input
-                        type="text"
-                        value={profile.github}
-                        onChange={(e) => handleChange('github', e.target.value)}
-                        placeholder="your-github-username"
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 outline-none focus:border-blue-500"
-                    />
-                </div>
-
-                <div>
-                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block flex items-center gap-1.5">
-                        <Link2 size={12} /> LinkedIn Profile URL
-                    </label>
-                    <input
-                        type="text"
-                        value={profile.linkedin}
-                        onChange={(e) => handleChange('linkedin', e.target.value)}
-                        placeholder="https://linkedin.com/in/your-profile"
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 outline-none focus:border-blue-500"
-                    />
-                </div>
-            </div>
-
-            {/* Save Button */}
-            <div className="flex items-center gap-4">
-                <button
-                    onClick={handleSave}
-                    disabled={saving}
-                    className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
-                >
-                    {saving ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
-                    {saving ? "Saving..." : "Save Changes"}
+            <div className="mt-5 flex justify-end">
+                <button type="submit" disabled={saving || !dirty} className={btn.primary}>
+                    {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                    {saving ? "Saving..." : "Save changes"}
                 </button>
-                {saveSuccess && (
-                    <span className="flex items-center gap-1.5 text-green-600 text-sm font-bold">
-                        <CheckCircle2 size={16} /> Saved!
-                    </span>
-                )}
             </div>
-        </div>
+        </form>
     );
 };
 
