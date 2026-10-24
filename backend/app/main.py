@@ -7,7 +7,6 @@ from app.db.base import Base
 from app.db.session import engine
 from app.routers.auth import router as auth_router
 from app.routers.cv import router as cv_router
-from app.routers.github import router as github_router
 from app.routers.interview import router as interview_router
 from app.routers.profile import router as profile_router
 
@@ -51,7 +50,6 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(cv_router)
-app.include_router(github_router)
 app.include_router(interview_router)
 app.include_router(profile_router)
 

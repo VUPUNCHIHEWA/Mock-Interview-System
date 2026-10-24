@@ -8,7 +8,8 @@ Three factors are measured from each recorded answer and turned into a
 (Filler Words was the first factor until 2026-10-16. It was REPLACED by
 Speech Rate because the speech-to-text leaves fillers out and a verbatim
 model was too slow on a laptop - see LIMITATIONS L9/L43. Filler counts with
-the old word list are still stored, only for the decision-tree model.) Every rule below is either simple arithmetic or a number
+the old word list are still stored: a stored count marks an answer whose
+voice was analysed. They are NOT part of any score.) Every rule below is either simple arithmetic or a number
 taken from a cited source (see VOCAL_SCORING.md for the full, plain-English
 explanation and worked examples, and SOURCES.md for the references).
 
@@ -71,9 +72,9 @@ Session level: all answers are pooled (total words / total speaking minutes,
 total long-pause seconds / total answer seconds, PVQ weighted by answer
 length), so every minute of speaking counts equally.
 
-The raw numbers used by the older parts of the app (filler count, long-pause
-count, pitch standard deviation in Hz) are still stored for the decision-tree
-model (ml_model.py), which was trained on them.
+The older raw numbers (filler count, long-pause count, pitch standard
+deviation in Hz) are still stored with each answer for reference. They are
+NOT used in any score. (The decision-tree model that used them was removed.)
 """
 
 import math
@@ -82,8 +83,8 @@ import re
 import librosa
 import numpy as np
 
-# OLD filler list - kept ONLY for the decision-tree model (ml_model.py), which
-# was trained on counts made with it. Not part of the vocal score any more.
+# OLD filler list - the count is still stored (it marks an answer whose voice
+# was analysed), but it is NOT part of the vocal score.
 FILLER_WORDS = ["um", "uh", "ah", "like", "you know", "basically",
                 "actually", "so", "i mean"]
 
@@ -143,7 +144,7 @@ def count_words(transcript: str) -> int:
 
 
 def count_filler_words(transcript: str) -> int:
-    """OLD filler count (FILLER_WORDS list) - only for the decision-tree model."""
+    """OLD filler count (FILLER_WORDS list) - stored for reference, not scored."""
     if not transcript:
         return 0
     transcript_lower = transcript.lower()
@@ -233,7 +234,7 @@ def analyze_voice(transcript: str, wav_path: str) -> dict:
     """
     Measures one answer. Returns:
         filler_word_count, long_pause_count, pitch_variation (Hz SD)  - raw numbers
-                                                     (old units, for ml_model.py)
+                                                     (old units, stored for reference only)
         word_count, speech_seconds, long_pause_seconds, pitch_pvq      - used for scoring
     Values that could not be measured are None (never a made-up number).
     """

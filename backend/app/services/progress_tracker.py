@@ -7,8 +7,7 @@ Purpose:
     Compares a student's earliest and most recent COMPLETED interview
     sessions to show whether their confidence indicators improved -
     filling the "no longitudinal tracking" gap identified in the
-    literature (same gap-justification papers as feedback_engine /
-    ml_model.py).
+    literature (same gap-justification papers as feedback_engine).
 
 Research basis:
     Same gap-justification papers established earlier in this project:

@@ -12,11 +12,9 @@ from app.models import InterviewSession, InterviewResponse, CustomPracticeQuesti
 from app.services.question_bank import get_next_question, AVAILABLE_ROLES, GENERAL_INTERVIEW_ROLE
 from app.services.voice_analysis import (analyze_voice, compute_session_vocal, combine_confidence,
                                          confidence_missing_reason, answer_speech_rate)
-from app.services.ml_model import predict_confidence_level
 from app.services.confidence_feedback import build_confidence_feedback
 from app.services.custom_practice import (CUSTOM_PRACTICE_ROLE, is_custom_practice, core_sessions_only,
                                           clean_custom_questions, shuffled)
-from app.services.career_resources import get_recommended_resources
 from app.services import ai_provider
 
 # --- Privacy: raw voice recordings ------------------------------------------
@@ -791,14 +789,6 @@ async def end_interview_session(data: dict, client=None, db=None):
     vocal_result = compute_session_vocal(responses_with_audio)
     final_vocal = vocal_result["vocalScore"]
     vocal_breakdown = vocal_result["vocalBreakdown"]
-    if responses_with_audio:
-        # Raw per-answer averages: only used as inputs for the decision-tree
-        # model (ml_model.py), which was trained on these numbers.
-        avg_filler = sum(r.filler_word_count for r in responses_with_audio) / len(responses_with_audio)
-        avg_pause = sum(r.long_pause_count or 0 for r in responses_with_audio) / len(responses_with_audio)
-        avg_pitch = sum(r.pitch_variation or 0 for r in responses_with_audio) / len(responses_with_audio)
-    else:
-        avg_filler, avg_pause, avg_pitch = None, None, None
     audio_responses = sum(1 for r in full_responses if r.audio_path)
     textual_score = avg_score
     # Empty until filled below - never a made-up placeholder sentence.
@@ -806,13 +796,10 @@ async def end_interview_session(data: dict, client=None, db=None):
     key_improvements = []
     final_visual = int(avg_visual) if avg_visual is not None else None
 
-    # The AI confidence level also needs BOTH camera and voice: with no
-    # measured voice it is "NOT_AVAILABLE", never a camera-only guess.
-    if avg_visual is None or final_vocal is None:
-        confidence_level = "NOT_AVAILABLE"
-    else:
-        confidence_level = predict_confidence_level(avg_visual, avg_filler, avg_pause, avg_pitch)
-    print(f"🌳 ML Core - Predicted Confidence Level: {confidence_level}")
+    # The decision-tree "confidence level" model was removed (outside the
+    # research scope). The key is kept as NOT_AVAILABLE so older pages that
+    # read it keep working; the results page hides the badge for this value.
+    confidence_level = "NOT_AVAILABLE"
 
     summary_engine = None
     is_text_mode = bool(session.interview_mode and session.interview_mode.upper() == "TEXT")
@@ -908,18 +895,10 @@ async def end_interview_session(data: dict, client=None, db=None):
     
     db.commit()
 
-    # --- BSc Research Feature: Career Guidance Suggestions (Supporting
-    # Feature, NOT a core research contribution - see career_resources.py
-    # docstring for full scope disclosure). Only triggers when the
-    # content/textual score indicates a genuine knowledge gap; behavioral
-    # weaknesses (visual/vocal) already have actionable tips via the
-    # Progress Tracker's Focus Area feature.
-    if session.role in (GENERAL_INTERVIEW_ROLE, CUSTOM_PRACTICE_ROLE):
-        # Learning resources are role-based; General Interview and Custom
-        # Practice have no role.
-        recommended_resources = {"triggered": False, "resources": [], "reason": None}
-    else:
-        recommended_resources = get_recommended_resources(session.role, textual_score)
+    # Role-based learning resources were removed (outside the research
+    # scope). The key is kept, always "not triggered", so the results page
+    # works unchanged.
+    recommended_resources = {"triggered": False, "resources": [], "reason": None}
     
     return {
         "success": True,

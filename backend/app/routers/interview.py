@@ -20,7 +20,6 @@ from app.services.confidence_feedback import build_confidence_feedback
 from app.services.custom_practice import core_sessions_only, CUSTOM_PRACTICE_ROLE
 from app.services.interview_service import continue_interview_session, start_interview_session, end_interview_session, replace_current_question, REPLACED_ANSWER_MARKER, stored_main_score
 from app.services.progress_tracker import get_user_progress, get_comparison_options, get_progress_timeline
-from app.services.istqb_quiz import get_quiz_questions, grade_quiz
 
 router = APIRouter()
 
@@ -475,30 +474,4 @@ async def get_progress_timeline_route(user_id: int, db: Session = Depends(get_db
         return {"success": True, **get_progress_timeline(db, user_id)}
     except Exception as e:
         print(f"❌ Error in get-progress-timeline: {str(e)}")
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-# --- BSc Research Feature: QA Career-Prep Practice Quiz (Supporting
-# Feature, extension of Career Guidance Suggestions - see
-# istqb_quiz.py for full scope/copyright disclosure). Original,
-# researcher-authored MCQ questions covering ISTQB Foundation syllabus
-# TOPIC AREAS - not copied from any copyrighted ISTQB exam material.
-@router.get("/api/istqb-quiz")
-async def get_istqb_quiz():
-    try:
-        questions = get_quiz_questions()
-        return {"success": True, "questions": questions}
-    except Exception as e:
-        print(f"❌ Error in get-istqb-quiz: {str(e)}")
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@router.post("/api/istqb-quiz/submit")
-async def submit_istqb_quiz(data: dict):
-    try:
-        answers = data.get("answers", {})
-        result = grade_quiz(answers)
-        return {"success": True, **result}
-    except Exception as e:
-        print(f"❌ Error in submit-istqb-quiz: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))

@@ -10,17 +10,14 @@ import Consent from "./pages/Consent";
 import Dashboard from "./pages/Dashboard";
 import Sidebar from './components/Sidebar';
 
-import Interview from "./pages/Interview";
 import History from "./pages/History";
 import CV from "./pages/CV";
-import Jobs from "./pages/Jobs";
 import VerifyOTP from "./pages/VerifyOTP";
 import InterviewSetup from './pages/InterviewSetup';
 import InterviewSession from './pages/InterviewSession';
 import InterviewResults from './pages/InterviewResults';
 import Profile from './pages/Profile';
 import ProgressPage from './pages/ProgressPage';
-import ISTQBQuizPage from './pages/ISTQBQuizPage';
 import CustomPractice from './pages/CustomPractice';
 import PracticeHistory from './pages/PracticeHistory';
 
@@ -73,16 +70,13 @@ function App() {
 
         <Route path="/dashboard" element={<MainLayout><Dashboard /></MainLayout>} />
         <Route path="/InterviewSetup" element={<MainLayout><InterviewSetup /></MainLayout>} />
-        <Route path="/interview" element={<MainLayout><Interview /></MainLayout>} />
         <Route path="/history" element={<MainLayout><History /></MainLayout>} />
         <Route path="/cv" element={<MainLayout><CV /></MainLayout>} />
-        <Route path="/jobs" element={<MainLayout><Jobs /></MainLayout>} />
         <Route path="/profile" element={<MainLayout><Profile /></MainLayout>} />
 
         <Route path="/interview-session" element={<InterviewSession />} />
         <Route path="/interview-results" element={<MainLayout><InterviewResults /></MainLayout>} />
         <Route path="/progress" element={<MainLayout><ProgressPage /></MainLayout>} />
-        <Route path="/istqb-quiz" element={<MainLayout><ISTQBQuizPage /></MainLayout>} />
         {/* Supporting feature: practise with your own questions (not tracked) */}
         <Route path="/custom-practice" element={<MainLayout><CustomPractice /></MainLayout>} />
         <Route path="/practice-history" element={<MainLayout><PracticeHistory /></MainLayout>} />
